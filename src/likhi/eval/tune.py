@@ -91,8 +91,11 @@ UNKNOWN_CONFIDENT_LOGP = -11.0  # keep in sync with likhi.engine.core
 
 def _score(word: str, ft: dict, uni: float, w: dict[str, float]) -> float:
     """Mirror of LikhiEngine.score over cached feature dicts (keep the two in sync)."""
+    from likhi.engine.core import looks_like_acronym
+
     xl = ft["xlit_logp"]
-    if not ft["in_lexicon"] and xl == xl:
+    acronym = (not ft["in_lexicon"]) and looks_like_acronym(word)
+    if not ft["in_lexicon"] and xl == xl and not acronym:
         confidence = 1.0 - min(1.0, max(0.0, -xl / 3.0))
         uni = uni + (UNKNOWN_CONFIDENT_LOGP - uni) * confidence
     s = w["unigram"] * uni
@@ -121,7 +124,7 @@ def _score(word: str, ft: dict, uni: float, w: dict[str, float]) -> float:
     if ft["avro"]:
         s += w["avro"]
     if not ft["in_lexicon"]:
-        scale = 1.0 if xl != xl else min(1.0, max(0.0, -xl / 3.0))
+        scale = 1.0 if (xl != xl or acronym) else min(1.0, max(0.0, -xl / 3.0))
         s += w["oov"] * scale
     return s
 
