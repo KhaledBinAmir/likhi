@@ -86,7 +86,15 @@ def cmd_cache(args: argparse.Namespace) -> int:
     return 0
 
 
+UNKNOWN_CONFIDENT_LOGP = -11.0  # keep in sync with likhi.engine.core
+
+
 def _score(word: str, ft: dict, uni: float, w: dict[str, float]) -> float:
+    """Mirror of LikhiEngine.score over cached feature dicts (keep the two in sync)."""
+    xl = ft["xlit_logp"]
+    if not ft["in_lexicon"] and xl == xl:
+        confidence = 1.0 - min(1.0, max(0.0, -xl / 3.0))
+        uni = uni + (UNKNOWN_CONFIDENT_LOGP - uni) * confidence
     s = w["unigram"] * uni
     if ft["rom_exact"]:
         s += w["rom_exact"] + w["rom_exact_log"] * math.log(1 + ft["rom_exact"])
@@ -113,7 +121,8 @@ def _score(word: str, ft: dict, uni: float, w: dict[str, float]) -> float:
     if ft["avro"]:
         s += w["avro"]
     if not ft["in_lexicon"]:
-        s += w["oov"]
+        scale = 1.0 if xl != xl else min(1.0, max(0.0, -xl / 3.0))
+        s += w["oov"] * scale
     return s
 
 
