@@ -25,11 +25,23 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--min-wiki", type=int, default=2, help="min Wikipedia count for corpus-only words"
     )
+    b = sub.add_parser("bigrams", help="build the pruned word-bigram table for context ranking")
+    b.add_argument("--out", type=Path, default=REPO / "models" / "lexicon")
+    b.add_argument("--wiki-lines", type=int)
+    b.add_argument("--min-count", type=int, default=2)
+    b.add_argument("--per-prev", type=int, default=60)
     args = ap.parse_args(argv)
     if args.cmd == "lexicon":
         from likhi.data.build_lexicon import build
 
         build(args.out, wiki_lines=args.wiki_lines, min_wiki=args.min_wiki)
+        return 0
+    if args.cmd == "bigrams":
+        from likhi.data.build_bigrams import build
+
+        build(
+            args.out, wiki_lines=args.wiki_lines, min_count=args.min_count, per_prev=args.per_prev
+        )
         return 0
     return 2
 

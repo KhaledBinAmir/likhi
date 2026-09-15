@@ -80,7 +80,9 @@ def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1") -> None:
     from likhi.engine.core import LikhiEngine
 
     t0 = time.perf_counter()
-    engine = LikhiEngine(personal_path="default")  # learning on: %LOCALAPPDATA%\Likhi\personal.sqlite
+    engine = LikhiEngine(
+        personal_path="default"
+    )  # learning on: %LOCALAPPDATA%\Likhi\personal.sqlite
     engine.suggest("ami")  # warm up caches and BLAS
     print(f"[likhi-server] engine ready in {(time.perf_counter() - t0) * 1000:.0f} ms", flush=True)
     with _Server((host, port), _Handler) as srv:

@@ -61,6 +61,7 @@ DEFAULT_WEIGHTS = {
     "oov": -3.0,
     "personal_sel": 3.0,
     "personal_word": 0.6,
+    "bigram": 0.7,  # weight on log P(word | previous word) relative to the unigram estimate
     "latin_base": -10.0,  # stands in for the unigram term of a raw-Latin candidate
     "latin": -4.0,
 }
@@ -92,6 +93,13 @@ class LikhiEngine:
         self.romans.load(str(lexicon_dir / "romans.marisa"))
         self.keys = marisa_trie.RecordTrie("<I")
         self.keys.load(str(lexicon_dir / "keys.marisa"))
+        self.bigrams = None
+        self.bigram_totals = None
+        if (lexicon_dir / "bigrams.marisa").exists():
+            self.bigrams = marisa_trie.RecordTrie("<I")
+            self.bigrams.load(str(lexicon_dir / "bigrams.marisa"))
+            self.bigram_totals = marisa_trie.RecordTrie("<I")
+            self.bigram_totals.load(str(lexicon_dir / "bigram_totals.marisa"))
         # normalizer for the unigram mixture
         total = 0
         for _w, (a, b, c) in self.uni.items():
@@ -153,6 +161,24 @@ class LikhiEngine:
             return 0
         a, b, c = rec[0]
         return a + 3 * b + 20 * c
+
+    def context_adjust(self, word: str, context: Sequence[str]) -> float:
+        """log P(word | prev) - log P(word): how much the previous word changes the odds.
+
+        Stupid backoff with a 0.4 penalty; a previous word without any bigram data gives 0 for
+        every candidate, so context never hurts when it is uninformative.
+        """
+        if self.bigrams is None or not context:
+            return 0.0
+        prev = context[-1]
+        tot = self.bigram_totals.get(prev)
+        if not tot:
+            return 0.0
+        total = float(tot[0][0])
+        rec = self.bigrams.get(f"{prev}\t{word}")
+        if rec:
+            return math.log(rec[0][0] / total) - self.unigram_logp(word)
+        return math.log(0.4)
 
     def candidates(
         self, roman: str, *, model_scored: int | None = None, static_prescore: bool = False
@@ -293,6 +319,8 @@ class LikhiEngine:
             s += w["personal_sel"] * (math.log1p(ft.personal_sel) + 3.0 * ft.personal_share)
             return s
         s = w["unigram"] * self.unigram_logp(word)
+        if context:
+            s += w["bigram"] * self.context_adjust(word, context)
         if ft.rom_exact:
             s += w["rom_exact"] + w["rom_exact_log"] * math.log(1 + ft.rom_exact)
         if ft.rom_prefix and not ft.rom_exact:
@@ -323,15 +351,16 @@ class LikhiEngine:
             s += w["personal_word"] * math.log1p(ft.personal_word)
         return s
 
-    def _suggest(self, roman: str, k: int) -> tuple[str, ...]:
+    def _suggest(self, roman: str, k: int, context: tuple[str, ...] = ()) -> tuple[str, ...]:
         feats = self.candidates(roman)
         if not feats:
             return ()
-        ranked = sorted(feats.items(), key=lambda kv: -self.score(kv[0], kv[1], roman))
+        ranked = sorted(feats.items(), key=lambda kv: -self.score(kv[0], kv[1], roman, context))
         return tuple(to_output(word) for word, _ in ranked[:k])
 
     def suggest(self, roman: str, context: Sequence[str] = (), k: int = 5) -> list[str]:
-        return list(self._suggest_cached(normalize_roman(roman), k))
+        prev = (canonical(context[-1]),) if context else ()
+        return list(self._suggest_cached(normalize_roman(roman), k, prev))
 
     def explain(self, roman: str, k: int = 8) -> list[tuple[str, float, Feats]]:
         feats = self.candidates(roman)
