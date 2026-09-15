@@ -2,7 +2,6 @@ import unicodedata
 
 from likhi.engine import textnorm as tn
 
-
 PRECOMPOSED = "বড়"  # ব + ড় (U+09DC)
 DECOMPOSED = "বড়"  # ব + ড + nukta (what NFC produces)
 

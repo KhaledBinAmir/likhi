@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-import tarfile
 import time
 import urllib.error
 import urllib.request
@@ -23,7 +22,9 @@ RAW = REPO / "data" / "raw"
 DAKSHINA_URL = "https://storage.googleapis.com/gresearch/dakshina/dakshina_dataset_v1.0.tar"
 DAKSHINA_PREFIX = "dakshina_dataset_v1.0/bn/"
 
-FREQWORDS_BASE = "https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/bn/"
+FREQWORDS_BASE = (
+    "https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/bn/"
+)
 FREQWORDS_FILES = ["bn_full.txt", "bn_50k.txt"]
 
 BNWIKI_URL = "https://dumps.wikimedia.org/bnwiki/latest/bnwiki-latest-pages-articles.xml.bz2"
@@ -93,7 +94,8 @@ def download(url: str, dest: Path, *, chunk: int = 1 << 20, retries: int = 5) ->
 def _http_range(url: str, start: int, length: int, *, retries: int = 5) -> bytes:
     """Fetch bytes [start, start+length) of url via an HTTP Range request."""
     req = urllib.request.Request(
-        url, headers={"Range": f"bytes={start}-{start + length - 1}", "User-Agent": "likhi-fetch/0.1"}
+        url,
+        headers={"Range": f"bytes={start}-{start + length - 1}", "User-Agent": "likhi-fetch/0.1"},
     )
     for attempt in range(1, retries + 1):
         try:
@@ -131,7 +133,9 @@ def _remote_tar_members(url: str):
         data_off = offset + 512
         blocks = (size + 511) // 512
         if typeflag == b"L":  # GNU long-name entry: the data block holds the real name
-            long_name = _http_range(url, data_off, size).split(b"\0", 1)[0].decode("utf-8", "replace")
+            long_name = (
+                _http_range(url, data_off, size).split(b"\0", 1)[0].decode("utf-8", "replace")
+            )
         else:
             if long_name is not None:
                 name, long_name = long_name, None
@@ -210,8 +214,12 @@ def fetch_banglatlit() -> None:
 
 
 # IndicXlit (AI4Bharat, MIT): fairseq checkpoint + per-language word-probability dicts used for rescoring.
-INDICXLIT_MODEL_URL = "https://github.com/AI4Bharat/IndicXlit/releases/download/v1.0/indicxlit-en-indic-v1.0.zip"
-INDICXLIT_DICTS_URL = "https://github.com/AI4Bharat/IndicXlit/releases/download/v1.0/word_prob_dicts.zip"
+INDICXLIT_MODEL_URL = (
+    "https://github.com/AI4Bharat/IndicXlit/releases/download/v1.0/indicxlit-en-indic-v1.0.zip"
+)
+INDICXLIT_DICTS_URL = (
+    "https://github.com/AI4Bharat/IndicXlit/releases/download/v1.0/word_prob_dicts.zip"
+)
 
 
 def fetch_indicxlit() -> None:
@@ -225,8 +233,15 @@ def fetch_indicxlit() -> None:
             continue
         with zipfile.ZipFile(zip_path) as zf:
             names = zf.namelist()
-            # Only Bengali dict is needed from word_prob_dicts; the model zip is taken whole.
-            wanted = [n for n in names if "word_prob" not in zip_path.name or "ben" in n or n.endswith("/")]
+            # Only the Bengali dict (bn_word_prob_dict.json) is needed from word_prob_dicts; the
+            # model zip is taken whole.
+            wanted = [
+                n
+                for n in names
+                if "word_prob" not in zip_path.name
+                or n.endswith("/")
+                or n.rsplit("/", 1)[-1].startswith("bn_")
+            ]
             for n in wanted:
                 zf.extract(n, out)
             log(f"extracted {len(wanted)} entries from {zip_path.name}")
@@ -244,7 +259,9 @@ FETCHERS = {
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("names", nargs="*", choices=sorted(FETCHERS), help="datasets to fetch")
     ap.add_argument("--all", action="store_true", help="fetch every dataset")
     args = ap.parse_args(argv)

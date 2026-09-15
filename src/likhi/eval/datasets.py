@@ -81,6 +81,7 @@ def _group(pairs: Iterable[tuple[str, str, float, str]], name: str, grouped: boo
 
 # --------------------------------------------------------------------------------------- Dakshina
 
+
 def _dakshina_lexicon_rows(split: str) -> Iterator[tuple[str, str, float, str]]:
     path = raw_dir() / "dakshina" / "bn" / "lexicons" / f"bn.translit.sampled.{split}.tsv"
     with _open_text(path) as f:
@@ -116,6 +117,7 @@ def dakshina_sentences(split: str = "test") -> list[SentenceItem]:
 
 # ------------------------------------------------------------------------------------ Aksharantar
 
+
 def _aksharantar_rows(split: str) -> Iterator[tuple[str, str, float, str]]:
     path = raw_dir() / "aksharantar" / f"ben_{split}.json"
     with _open_text(path) as f:
@@ -132,7 +134,9 @@ def _aksharantar_rows(split: str) -> Iterator[tuple[str, str, float, str]]:
             )
 
 
-def aksharantar(split: str = "test", *, grouped: bool = False, sources: set[str] | None = None) -> WordSet:
+def aksharantar(
+    split: str = "test", *, grouped: bool = False, sources: set[str] | None = None
+) -> WordSet:
     """Aksharantar bn. splits: train / valid / test. ``sources`` filters e.g. {"AK-Freq"}."""
     rows = _aksharantar_rows(split)
     if sources:
@@ -190,6 +194,7 @@ def banglatlit_word_pairs(split: str = "test", *, grouped: bool = True) -> WordS
 
 # ---------------------------------------------------------------------------------- Personal set
 
+
 def personal(path: Path | None = None) -> tuple[list[SentenceItem], WordSet]:
     """Khaled's personal set: JSONL with {"roman": ..., "gold": [...], "tags": [...]}.
 
@@ -207,7 +212,9 @@ def personal(path: Path | None = None) -> tuple[list[SentenceItem], WordSet]:
                 continue
             obj = json.loads(line)
             golds = obj["gold"] if isinstance(obj["gold"], list) else [obj["gold"]]
-            sents.append(SentenceItem(roman=obj["roman"], gold=canonical(golds[0]), source="personal"))
+            sents.append(
+                SentenceItem(roman=obj["roman"], gold=canonical(golds[0]), source="personal")
+            )
             r_toks = [_strip_punct(t) for t in obj["roman"].split()]
             for g in golds:
                 b_toks = [_strip_punct(t) for t in g.split()]
@@ -220,6 +227,7 @@ def personal(path: Path | None = None) -> tuple[list[SentenceItem], WordSet]:
 
 
 # ------------------------------------------------------------------------------------- Registry
+
 
 def load_wordset(name: str) -> WordSet:
     """Resolve names like 'dakshina-test', 'dakshina-dev+grouped', 'aksharantar-test',

@@ -83,7 +83,11 @@ class _Unpickler(pickle.Unpickler):
             return collections.OrderedDict
         if module == "argparse" and name == "Namespace":
             return argparse.Namespace
-        if module.startswith("omegaconf") or module.startswith("fairseq.dataclass") or module.startswith("fairseq"):
+        if (
+            module.startswith("omegaconf")
+            or module.startswith("fairseq.dataclass")
+            or module.startswith("fairseq")
+        ):
             # fairseq dataclass configs: build a plain Namespace-like shell so unpickling succeeds
             # even when fairseq itself is not installed.
             try:
