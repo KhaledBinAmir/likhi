@@ -18,6 +18,20 @@ Short records of choices that are not obvious from the code. Newest first.
   only call the model when the lexicon is unsure, and the code is easy to optimize or distil.
   CTranslate2 remains available behind the `ct2` extra for machines where it works.
 
+## 2026-09-16: Ranker weights are chosen on real typing data, synthetic habits second
+
+- The habit-augmented tuner produced weights that were much better on synthetic vowel-dropping
+  (+12 points) but worse on real chat words (-2) and on Khaled's reported words (14/17 vs 17/17).
+  The cause is structural: shorthand makes the model read acronyms, so the tuner learned to mute
+  the model, which hurts every model-driven case (loanwords, dialect verbs).
+- Two targeted fixes recovered most of it without muting the model: acronym readings (segments of
+  Bengali letter names) no longer get the confident-unknown-word relief, and the semivowel য়
+  never creates a consonant slot in the phonetic key (koria/koriya/korea all reach কোরিয়া).
+- Deployed "blend C": retuned key weights (2.0/1.2), attested-spelling weights (2.5 + 0.8·log),
+  model vote restored (top-1 bonus 1.0, log-prob 0.5). Selection table in STATUS.md.
+- Rejected: gating weights by vowel ratio of the typed string; it does not separate shorthand from
+  English loanwords ("volt", "chat").
+
 ## 2026-09-16: Beam search finalization follows fairseq exactly
 
 - Khaled's word "khacche" exposed a beam-search bug: the model's own best hypothesis খাচ্ছে was
