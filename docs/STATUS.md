@@ -30,7 +30,12 @@ personalization store, bigram context table, engine server, PIME text-service sk
 | IndicXlit, NumPy port, beam 5, corrected finalization | **59.6** | 79.5 | **84.6** | 12.5 | | |
 | IndicXlit + word-frequency rerank | 69.1 | 78.9 | 79.9 | 9.5 | | |
 | Likhi v0 (hand-set weights) | **70.6** | 82.6 | 83.7 | 11.2 | 31.4 → 43.6 after the gap/raw-logp ranker fix (first 4000 pairs) | **89.9** (top-3 94.8, top-5 95.2, CER 5.4) |
-| Likhi v0 (tuned weights, dev macro 68.1 → 70.1) | running | | | | 42.9 | **90.5** (top-3 94.6, top-5 94.9, CER 5.2); val words 84.2 |
+| Likhi v0 (tuned weights, dev macro 68.1 → 70.1) | 70.5 | 81.2 | 82.3 | 11.3 | 42.9 (4000 pairs) | **90.5** (top-3 94.6, top-5 94.9, CER 5.2); val words 84.2 |
+| Likhi v0 + beam-score fix + confidence-scaled OOV (weights not yet re-tuned) | 65.9 | **89.9** | **91.6** | 10.5 | **55.4** (all 9300 pairs; top-5 78.4) | 89.5 (top-5 95.4); feedback set 17/17 |
+
+The last row trades Dakshina top-1 for much higher recall everywhere (top-5 +8 points on Dakshina,
+Aksharantar top-1 +12); the weights were tuned before these features existed, so a re-tune on
+habit-augmented dev data is running.
 
 Published for reference: IndicXlit 55.4 top-1 (69.4 with rerank), Google 2020 transformer 49.4.
 
