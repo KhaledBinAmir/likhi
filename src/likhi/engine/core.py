@@ -70,6 +70,13 @@ DEFAULT_WEIGHTS = {
 }
 
 
+UNKNOWN_CONFIDENT_LOGP = -11.0  # log-prior given to an unknown word the model is sure about
+
+
+class AbortedError(Exception):
+    """Raised when a suggestion computation was abandoned because newer input arrived."""
+
+
 def personal_bonus(w: dict[str, float], count: float, share: float) -> float:
     """Evidence from the user's own picks for this exact roman string.
 
@@ -204,6 +211,7 @@ class LikhiEngine:
         model_scored: int | None = None,
         static_prescore: bool = False,
         use_model: bool = True,
+        abort=None,
     ) -> dict[str, Feats]:
         """Gather candidates from all channels and attach features.
 
@@ -211,7 +219,9 @@ class LikhiEngine:
         ``static_prescore`` pre-ranks with a weight-independent heuristic (used when tuning weights,
         so cached features do not depend on the weights being tuned);
         ``use_model=False`` is the fast path (tries + rules only, a few milliseconds) used while a
-        key is being typed; the full path fills in behind it.
+        key is being typed; the full path fills in behind it. ``abort`` is an optional callable
+        checked between the expensive stages; when it returns True the work is dropped and
+        ``AbortedError`` is raised (the caller has moved on to a newer input).
         """
         r = normalize_roman(roman)
         feats: dict[str, Feats] = {}
@@ -295,12 +305,17 @@ class LikhiEngine:
         # 3. transliteration model (encoder shared with the scoring pass below)
         enc_kv = None
         if self.xlit is not None and use_model:
+            if abort is not None and abort():
+                raise AbortedError(r)
             enc_kv = self.xlit.encode(r)
-            for rank, (word, _lp) in enumerate(
+            for rank, (word, lp) in enumerate(
                 self.xlit.beam_search(r, beam=self.beam, nbest=self.beam, enc_kv=enc_kv), 1
             ):
                 ft = f(word)
                 ft.xlit_rank = ft.xlit_rank or rank
+                # The beam already knows log P(word | roman): its scores are length-normalized
+                # (sum / (chars + EOS)), so undo that to match score_candidates' raw sums.
+                ft.xlit_logp = float(lp) * (len(word) + 1)
                 ft.sources.add("xlit")
 
         # 4. rule literal
@@ -332,15 +347,19 @@ class LikhiEngine:
         # Model scores for the most promising candidates only (batched teacher forcing is the
         # expensive step; everything else is a trie lookup).
         if self.xlit is not None and use_model and feats:
+            if abort is not None and abort():
+                raise AbortedError(r)
             n = self.model_scored if model_scored is None else model_scored
+            unscored = {w: ft for w, ft in feats.items() if ft.xlit_logp != ft.xlit_logp}
             if static_prescore:
-                pre = sorted(feats.items(), key=lambda kv: -self._static_prescore(kv[0], kv[1]))
+                pre = sorted(unscored.items(), key=lambda kv: -self._static_prescore(kv[0], kv[1]))
             else:
-                pre = sorted(feats.items(), key=lambda kv: -self.score(kv[0], kv[1], r))
+                pre = sorted(unscored.items(), key=lambda kv: -self.score(kv[0], kv[1], r))
             words = [w for w, _ in pre[:n]]
-            lps = self.xlit.score_candidates(r, words, enc_kv=enc_kv)
-            for word, lp in zip(words, lps, strict=True):
-                feats[word].xlit_logp = float(lp)
+            if words:
+                lps = self.xlit.score_candidates(r, words, enc_kv=enc_kv)
+                for word, lp in zip(words, lps, strict=True):
+                    feats[word].xlit_logp = float(lp)
         return feats
 
     def _static_prescore(self, word: str, ft: Feats) -> float:
@@ -366,7 +385,14 @@ class LikhiEngine:
             return (
                 w["latin_base"] + w["latin"] + personal_bonus(w, ft.personal_sel, ft.personal_share)
             )
-        s = w["unigram"] * self.unigram_logp(word)
+        uni = self.unigram_logp(word)
+        xl = ft.xlit_logp
+        if not ft.in_lexicon and xl == xl:
+            # Unknown words sit at the unigram floor, a hidden second penalty. When the model is
+            # confident the word is real, lift the prior towards that of a rare-but-real word.
+            confidence = 1.0 - min(1.0, max(0.0, -xl / 3.0))
+            uni = uni + (UNKNOWN_CONFIDENT_LOGP - uni) * confidence
+        s = w["unigram"] * uni
         if context:
             s += w["bigram"] * self.context_adjust(word, context)
         if ft.rom_exact:
@@ -393,7 +419,12 @@ class LikhiEngine:
         if ft.avro:
             s += w["avro"]
         if not ft.in_lexicon:
-            s += w["oov"]
+            # The unknown-word penalty encodes "probably not a real word". A confident model is
+            # evidence to the contrary: at log P > -3 the penalty fades, at log P ~ 0 it vanishes
+            # (খাইতেছো for "khaitecho" is unknown to the lexicon but certain for the model).
+            xl = ft.xlit_logp
+            scale = 1.0 if xl != xl else min(1.0, max(0.0, -xl / 3.0))
+            s += w["oov"] * scale
         if ft.personal_sel:
             s += personal_bonus(w, ft.personal_sel, ft.personal_share)
         if ft.personal_word:
@@ -401,9 +432,9 @@ class LikhiEngine:
         return s
 
     def _suggest(
-        self, roman: str, k: int, context: tuple[str, ...] = (), use_model: bool = True
+        self, roman: str, k: int, context: tuple[str, ...] = (), use_model: bool = True, abort=None
     ) -> tuple[str, ...]:
-        feats = self.candidates(roman, use_model=use_model)
+        feats = self.candidates(roman, use_model=use_model, abort=abort)
         if not feats:
             return ()
         if use_model:
@@ -430,10 +461,21 @@ class LikhiEngine:
         return any(ft.rom_exact >= 2 for ft in feats.values())
 
     def suggest(
-        self, roman: str, context: Sequence[str] = (), k: int = 5, *, fast: bool = False
+        self,
+        roman: str,
+        context: Sequence[str] = (),
+        k: int = 5,
+        *,
+        fast: bool = False,
+        abort=None,
     ) -> list[str]:
-        """Ranked candidates. ``fast=True`` skips the transliteration model (see candidates())."""
+        """Ranked candidates. ``fast=True`` skips the transliteration model (see candidates()).
+        ``abort`` (callable) lets a caller abandon a full computation that became stale."""
         prev = (canonical(context[-1]),) if context else ()
+        if abort is not None:
+            # abortable computations bypass the cache key (a callable is not hashable/stable)
+            out = self._suggest(normalize_roman(roman), k, prev, not fast, abort)
+            return list(out)
         return list(self._suggest_cached(normalize_roman(roman), k, prev, not fast))
 
     def explain(self, roman: str, k: int = 8) -> list[tuple[str, float, Feats]]:
