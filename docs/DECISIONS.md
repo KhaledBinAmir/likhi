@@ -18,6 +18,15 @@ Short records of choices that are not obvious from the code. Newest first.
   only call the model when the lexicon is unsure, and the code is easy to optimize or distil.
   CTranslate2 remains available behind the `ct2` extra for machines where it works.
 
+## 2026-09-16: onnxruntime is out too (for now)
+
+- onnxruntime 1.30.0 crashes with an access violation at import on the same machine, in the uv
+  venv, in a plain `python -m venv`, and with the base interpreter. torch 2.14 and CTranslate2
+  4.8.2 fail the same way at DLL load, while NumPy (OpenBLAS) and marisa-trie work. No system
+  exploit-protection mitigations are set. Whatever the cause on this box, three independent
+  native ML runtimes failing is a good reason to keep the shipped engine NumPy-only and treat
+  faster runtimes as optional accelerators detected at start-up, never as requirements.
+
 ## 2026-09-16: No torch anywhere
 
 - The fairseq checkpoint is read by `scripts/fairseq_ckpt.py`, a small unpickler that maps torch
