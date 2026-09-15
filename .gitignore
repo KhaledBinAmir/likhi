@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Large local artifacts (downloaded datasets, built models, caches)
+data/raw/
+data/processed/
+data/cache/
+models/
+*.tar
+*.zip
+*.bz2
+*.xz
+
+# Personal / private
+data/personal/*.jsonl
+!data/personal/README.md
+*.sqlite
+*.db
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
