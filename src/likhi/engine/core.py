@@ -452,13 +452,30 @@ class LikhiEngine:
         return tuple(to_output(word) for word, _ in ranked[:k])
 
     def has_strong_match(self, roman: str) -> bool:
-        """True when the trie channels alone have solid evidence (an attested romanization or an
-        exact phonetic-key match for a lexicon word). When False, the quick model-free answer is
-        probably poor and callers should wait for the model."""
-        feats = self.candidates(roman, use_model=False)
-        # Phonetic-key matches alone are not enough: "khacche" key-matches কিছু/কাছে, which would
-        # be shown while the model's খাচ্ছে is still computing. Attested spellings are reliable.
-        return any(ft.rom_exact >= 2 for ft in feats.values())
+        """True when the trie channels alone have solid evidence (an attested spelling)."""
+        return self.fast_suggest(roman, (), 1)[1]
+
+    def fast_suggest(
+        self, roman: str, context: Sequence[str] = (), k: int = 5
+    ) -> tuple[list[str], bool]:
+        """Model-free ranking plus a confidence flag, from one pass over the trie channels.
+
+        The flag is True when some candidate is an attested spelling of the typed string (count
+        >= 2). Phonetic-key matches alone are not enough: "khacche" key-matches কিছু/কাছে, which
+        would be shown while the model's খাচ্ছে is still computing.
+        """
+        r = normalize_roman(roman)
+        prev = (canonical(context[-1]),) if context else ()
+        feats = self.candidates(r, use_model=False)
+        if not feats:
+            return [], False
+        w = self.w["rom_exact_fast"]
+        ranked = sorted(
+            feats.items(),
+            key=lambda kv: -(self.score(kv[0], kv[1], r, prev) + w * math.log1p(kv[1].rom_exact)),
+        )
+        strong = any(ft.rom_exact >= 2 for ft in feats.values())
+        return [to_output(word) for word, _ in ranked[:k]], strong
 
     def suggest(
         self,
