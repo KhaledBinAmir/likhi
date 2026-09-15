@@ -51,6 +51,7 @@ DEFAULT_WEIGHTS = {
     "unigram": 1.0,
     "rom_exact": 2.5,
     "rom_exact_log": 0.8,
+    "rom_exact_fast": 2.5,  # extra weight on attested spellings in the model-free fast ranking
     "rom_prefix": 0.3,
     "key_fine": 1.2,
     "key_coarse": 0.6,
@@ -405,7 +406,18 @@ class LikhiEngine:
         feats = self.candidates(roman, use_model=use_model)
         if not feats:
             return ()
-        ranked = sorted(feats.items(), key=lambda kv: -self.score(kv[0], kv[1], roman, context))
+        if use_model:
+            ranked = sorted(feats.items(), key=lambda kv: -self.score(kv[0], kv[1], roman, context))
+        else:
+            # Model-free ranking: attested spellings are the best evidence we have, so weigh them
+            # more than in the full ranking (where the model score does that job).
+            w = self.w["rom_exact_fast"]
+            ranked = sorted(
+                feats.items(),
+                key=lambda kv: (
+                    -(self.score(kv[0], kv[1], roman, context) + w * math.log1p(kv[1].rom_exact))
+                ),
+            )
         return tuple(to_output(word) for word, _ in ranked[:k])
 
     def has_strong_match(self, roman: str) -> bool:
