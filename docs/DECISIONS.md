@@ -27,6 +27,11 @@ Short records of choices that are not obvious from the code. Newest first.
   `beam`. Fixed in `xlit_np.beam_search`; a speculative early-stop shortcut was removed as well.
 - Lesson: keep a few real typing reports as a committed regression set (`data/feedback/words.jsonl`,
   eval set `feedback-words`); one word found a bug that thousands of benchmark items hid.
+- Same session, "khaitecho": the beam's own hypotheses never received a model score, because the
+  pre-ranking that chooses which 16 candidates to score penalizes unscored words. Beam outputs
+  now carry their un-normalized beam log-prob directly, and only other candidates are scored.
+  The unknown-word penalty and the unigram floor are also scaled down when the model is confident
+  (log P > -3), so dialect forms the lexicon lacks but the model knows (খাইতেছো) can win.
 
 ## 2026-09-16: Never use `\W` on Bengali text
 

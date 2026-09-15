@@ -36,9 +36,10 @@ from likhi import __version__
 DEFAULT_PORT = 47123
 DEFAULT_DEADLINE_MS = 12.0
 # Extra wait when the model-free answer has no strong evidence. Prefixes of a word being typed
-# are naturally unattested, so this fires on many keystrokes of a rare word: keep it short enough
-# to feel like a beat, not a stall. Commits always re-ask with a long deadline.
-WEAK_MATCH_DEADLINE_MS = 50.0
+# are naturally unattested, so this fires on many keystrokes of a rare word. Hard budget: a fast
+# typist sends a key every ~65 ms, so typing deadline + this must stay well under that. Commits
+# always re-ask with a long deadline, so correctness never depends on this wait.
+WEAK_MATCH_DEADLINE_MS = 25.0
 COMMIT_DEADLINE_MS = 400.0
 
 
