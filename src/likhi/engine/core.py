@@ -132,10 +132,12 @@ class LikhiEngine:
         self._floor = math.log(0.5 / self._uni_total)
 
         self.w = dict(DEFAULT_WEIGHTS)
-        tuned = lexicon_dir / "weights.json"
-        if tuned.exists():  # written by likhi-tune
-            import json
+        import json
+        import os
 
+        # LIKHI_WEIGHTS points at an alternative weights file (A/B evaluation of candidate weights).
+        tuned = Path(os.environ.get("LIKHI_WEIGHTS") or (lexicon_dir / "weights.json"))
+        if tuned.exists():  # written by likhi-tune
             self.w.update(json.loads(tuned.read_text(encoding="utf-8")))
         self.w.update(weights or {})
         self.beam = beam
