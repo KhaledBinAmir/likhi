@@ -25,11 +25,7 @@ def engine():
         ("amr", "আমার"),
         ("aamar", "আমার"),
         ("korchi", "করছি"),
-        pytest.param(
-            "korci",
-            "করছি",
-            marks=pytest.mark.xfail(reason="ranker weights not tuned yet", strict=False),
-        ),
+        ("korci", "করছি"),
         ("tumi", "তুমি"),
     ],
 )
@@ -56,6 +52,10 @@ def test_learning_moves_choice_to_top(tmp_path):
 
     e = LikhiEngine(personal_path=tmp_path / "p.sqlite")
     assert e.suggest("amr", k=3)[0] == "আমার"
+    e.learn("amr", "আমরা")
+    # one pick must not overturn a strongly established word, but should surface the choice
+    assert e.suggest("amr", k=3)[0] == "আমার"
+    assert "আমরা" in e.suggest("amr", k=3)
     for _ in range(3):
         e.learn("amr", "আমরা")
     assert e.suggest("amr", k=3)[0] == "আমরা"
