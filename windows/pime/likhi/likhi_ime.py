@@ -256,6 +256,22 @@ class LikhiTextService(TextService):
         self.showMessage("Likhi: %s" % ("বাংলা" if self.bangla else "English"), 1)
 
     def _current(self):
+        """The candidate a commit should use.
+
+        While typing we accept partial (model-less) rankings for speed; at commit time, if the user
+        has not moved the highlight, ask once more with a longer deadline so the full ranking wins.
+        """
+        if self.cands and self.cursor == 0 and self.buf:
+            resp = self.engine.request(
+                {
+                    "op": "suggest",
+                    "roman": self.buf,
+                    "k": int(self.cfg["candidates"]),
+                    "deadline_ms": int(self.cfg.get("commit_deadline_ms", 400)),
+                }
+            )
+            if resp and resp.get("ok") and resp.get("candidates"):
+                return resp["candidates"][0]
         if self.cands and 0 <= self.cursor < len(self.cands):
             return self.cands[self.cursor]
         return self.buf
@@ -273,7 +289,12 @@ class LikhiTextService(TextService):
         self.setCompositionString(self.buf)
         self.setCompositionCursor(len(self.buf))
         resp = self.engine.request(
-            {"op": "suggest", "roman": self.buf, "k": int(self.cfg["candidates"])}
+            {
+                "op": "suggest",
+                "roman": self.buf,
+                "k": int(self.cfg["candidates"]),
+                "deadline_ms": int(self.cfg.get("type_deadline_ms", 12)),
+            }
         )
         cands = list(resp.get("candidates", [])) if resp and resp.get("ok") else []
         if self.buf not in cands:
