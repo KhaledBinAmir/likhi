@@ -12,7 +12,7 @@ Updated 2026-09-16. Stage numbers refer to docs/PLAN.md section 4.
 | Avro rule-based baseline measured | done |
 | IndicXlit running offline on Windows (pure NumPy; CTranslate2 crashed here) | done, matches paper |
 | Personal test set (~300 sentences) | **waiting for Khaled** |
-| PIME smoke test (needs admin install) | **kit ready, waiting for Khaled** |
+| PIME smoke test (needs admin install) | **passed**: PIME 1.3.0 + Likhi text service typing system-wide on Windows 11 26200; first-user verdict "70% Gboard feel" |
 
 ## Stage 1 (engine v0) — in progress
 
