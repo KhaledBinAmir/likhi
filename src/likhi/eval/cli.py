@@ -179,6 +179,9 @@ def _print_result(r: dict) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from likhi.engine.threads import limit_blas_threads
+
+    limit_blas_threads()
     ap = argparse.ArgumentParser(
         prog="likhi-eval", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
