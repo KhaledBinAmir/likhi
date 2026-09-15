@@ -35,6 +35,7 @@ from likhi import __version__
 
 DEFAULT_PORT = 47123
 DEFAULT_DEADLINE_MS = 12.0
+WEAK_MATCH_DEADLINE_MS = 60.0  # extra wait when the model-free answer has no strong evidence
 COMMIT_DEADLINE_MS = 400.0
 
 
@@ -76,6 +77,15 @@ class SuggestService:
             return full, False
         except Exception:
             pass  # timeout (or a model error): fall back to the fast path
+        with self.lock:
+            strong = self.engine.has_strong_match(roman)
+        if not strong:
+            # The trie channels have nothing convincing (typically an English loanword or a name):
+            # a wrong-looking flash is worse than a slightly later answer, so wait a bit longer.
+            try:
+                return fut.result(timeout=WEAK_MATCH_DEADLINE_MS / 1000.0), False
+            except Exception:
+                pass
         with self.lock:
             fast = self.engine.suggest(roman, context, k, fast=True)
         return fast, True

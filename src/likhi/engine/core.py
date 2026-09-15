@@ -408,6 +408,13 @@ class LikhiEngine:
         ranked = sorted(feats.items(), key=lambda kv: -self.score(kv[0], kv[1], roman, context))
         return tuple(to_output(word) for word, _ in ranked[:k])
 
+    def has_strong_match(self, roman: str) -> bool:
+        """True when the trie channels alone have solid evidence (an attested romanization or an
+        exact phonetic-key match for a lexicon word). When False, the quick model-free answer is
+        probably poor and callers should wait for the model."""
+        feats = self.candidates(roman, use_model=False)
+        return any(ft.rom_exact or (ft.key_fine and ft.in_lexicon) for ft in feats.values())
+
     def suggest(
         self, roman: str, context: Sequence[str] = (), k: int = 5, *, fast: bool = False
     ) -> list[str]:
