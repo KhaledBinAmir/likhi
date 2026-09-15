@@ -12,3 +12,6 @@
 {"roman": "khacche", "gold": ["খাচ্ছে"], "tags": ["feedback"], "note": "2026-09-16 second session"}
 {"roman": "khaicho", "gold": ["খাইছো"], "tags": ["feedback", "dialect"]}
 {"roman": "khaiteche", "gold": ["খাইতেছে"], "tags": ["feedback", "dialect"], "note": "model gives খেটেছি; lexicon lacks dialect verb forms"}
+{"roman": "khacchi", "gold": ["খাচ্ছি"], "tags": ["feedback"]}
+{"roman": "khaitecho", "gold": ["খাইতেছো"], "tags": ["feedback", "dialect"]}
+{"roman": "khaitechi", "gold": ["খাইতেছি"], "tags": ["feedback", "dialect"]}

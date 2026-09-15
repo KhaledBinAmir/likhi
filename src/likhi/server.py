@@ -35,10 +35,10 @@ from likhi import __version__
 
 DEFAULT_PORT = 47123
 DEFAULT_DEADLINE_MS = 12.0
-# Extra wait when the model-free answer has no strong evidence. The NumPy model currently needs
-# 80-130 ms per word on an i9 (beam + scoring), so this is what it takes to show the right answer
-# on the first display of a rare word; common words never wait. Stage 2 latency work shrinks it.
-WEAK_MATCH_DEADLINE_MS = 160.0
+# Extra wait when the model-free answer has no strong evidence. Prefixes of a word being typed
+# are naturally unattested, so this fires on many keystrokes of a rare word: keep it short enough
+# to feel like a beat, not a stall. Commits always re-ask with a long deadline.
+WEAK_MATCH_DEADLINE_MS = 50.0
 COMMIT_DEADLINE_MS = 400.0
 
 
@@ -56,17 +56,25 @@ class SuggestService:
         self.pending: dict[tuple, Future] = {}
         self.full_cache: OrderedDict[tuple, list[str]] = OrderedDict()
         self.cache_size = cache_size
+        self.latest_key: tuple | None = None  # most recent input; older jobs may abort
+        self.waiting: set[tuple] = set()  # keys a request is currently blocked on
 
     def _key(self, roman: str, context: tuple[str, ...], k: int) -> tuple:
         return (roman, context[-1:] if context else (), k)
 
     def _full(self, roman: str, context: tuple[str, ...], k: int) -> list[str]:
-        return self.engine.suggest(roman, context, k)
+        key = self._key(roman, context, k)
+        # Abandon this job between model stages if a newer input has superseded it, unless someone
+        # is still waiting for exactly this key (a commit re-ask).
+        return self.engine.suggest(
+            roman, context, k, abort=lambda: self.latest_key != key and key not in self.waiting
+        )
 
     def suggest(
         self, roman: str, context: tuple[str, ...], k: int, deadline_ms: float
     ) -> tuple[list[str], bool]:
         key = self._key(roman, context, k)
+        self.latest_key = key
         cached = self.full_cache.get(key)
         if cached is not None:
             self.full_cache.move_to_end(key)
@@ -81,25 +89,26 @@ class SuggestService:
             fut = self.pool.submit(self._full, roman, context, k)
             self.pending[key] = fut
             fut.add_done_callback(lambda f, key=key: self._done(key, f))
+        self.waiting.add(key)
         try:
-            full = fut.result(timeout=max(0.0, deadline_ms) / 1000.0)
-            return full, False
-        except Exception:
-            pass  # timeout (or a model error): fall back to the fast path
-        strong = self.engine.has_strong_match(roman)
-        if not strong:
-            # The trie channels have nothing convincing (typically an English loanword or a name):
-            # a wrong-looking flash is worse than a slightly later answer, so wait a bit longer.
             try:
-                return fut.result(timeout=WEAK_MATCH_DEADLINE_MS / 1000.0), False
+                return fut.result(timeout=max(0.0, deadline_ms) / 1000.0), False
             except Exception:
-                pass
-        fast = self.engine.suggest(roman, context, k, fast=True)
-        return fast, True
+                pass  # timeout (or a model error / abort): fall back to the fast path
+            if not self.engine.has_strong_match(roman):
+                # The trie channels have nothing convincing (typically an English loanword or a
+                # name): a wrong-looking flash is worse than a slightly later answer, so wait.
+                try:
+                    return fut.result(timeout=WEAK_MATCH_DEADLINE_MS / 1000.0), False
+                except Exception:
+                    pass
+        finally:
+            self.waiting.discard(key)
+        return self.engine.suggest(roman, context, k, fast=True), True
 
     def _done(self, key: tuple, fut: Future) -> None:
         self.pending.pop(key, None)
-        if not fut.cancelled() and fut.exception() is None:
+        if not fut.cancelled() and fut.exception() is None:  # aborted jobs raise, so are skipped
             self.full_cache[key] = fut.result()
             while len(self.full_cache) > self.cache_size:
                 self.full_cache.popitem(last=False)
@@ -154,13 +163,15 @@ class _Server(socketserver.ThreadingTCPServer):
 def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1") -> None:
     from likhi.engine.threads import limit_blas_threads
 
-    limit_blas_threads()
+    # 4 BLAS threads: batched candidate scoring gets ~1.5x faster; the beam is unaffected.
+    limit_blas_threads(4)
     from likhi.engine.core import LikhiEngine
 
     t0 = time.perf_counter()
     engine = LikhiEngine(
-        personal_path="default"
-    )  # learning on: %LOCALAPPDATA%\Likhi\personal.sqlite
+        personal_path="default",  # learning on: %LOCALAPPDATA%\Likhi\personal.sqlite
+        model_scored=16,  # 12 would be ~25% cheaper but measurably worse on rare words
+    )
     engine.suggest("ami")  # warm up caches and BLAS
     print(f"[likhi-server] engine ready in {(time.perf_counter() - t0) * 1000:.0f} ms", flush=True)
     with _Server((host, port), _Handler) as srv:
