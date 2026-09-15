@@ -249,7 +249,31 @@ def load_wordset(name: str) -> WordSet:
         return banglatlit_word_pairs(base.split("-")[1], grouped=True)
     if base == "personal-words":
         return personal()[1]
+    if base == "feedback-words":
+        return feedback_words()
     raise KeyError(f"unknown word set: {name}")
+
+
+def feedback_words(path: Path | None = None) -> WordSet:
+    """Words reported from real typing sessions (data/feedback/words.jsonl, committed)."""
+    path = path or (raw_dir().parent / "feedback" / "words.jsonl")
+    items: list[WordItem] = []
+    if path.exists():
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    obj = json.loads(line)
+                    golds = obj["gold"] if isinstance(obj["gold"], list) else [obj["gold"]]
+                    items.append(
+                        WordItem(
+                            normalize_roman(obj["roman"]),
+                            tuple(canonical(g) for g in golds),
+                            1.0,
+                            "feedback",
+                        )
+                    )
+    return WordSet("feedback-words", items)
 
 
 def load_sentences(name: str) -> list[SentenceItem]:
