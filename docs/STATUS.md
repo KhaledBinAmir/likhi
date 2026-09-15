@@ -29,7 +29,7 @@ personalization store, bigram context table, engine server, PIME text-service sk
 | IndicXlit, NumPy port, beam 5 | 57.9 | 75.7 | 79.9 | 12.5 | | |
 | IndicXlit + word-frequency rerank | 69.1 | 78.9 | 79.9 | 9.5 | | |
 | Likhi v0 (hand-set weights) | **70.6** | 82.6 | 83.7 | 11.2 | 31.4 → 43.6 after the gap/raw-logp ranker fix (first 4000 pairs) | **89.9** (top-3 94.8, top-5 95.2, CER 5.4) |
-| Likhi v0 (tuned weights, dev macro 68.1 → 70.1) | running | | | | running | running |
+| Likhi v0 (tuned weights, dev macro 68.1 → 70.1) | running | | | | 42.9 | **90.5** (top-3 94.6, top-5 94.9, CER 5.2); val words 84.2 |
 
 Published for reference: IndicXlit 55.4 top-1 (69.4 with rerank), Google 2020 transformer 49.4.
 

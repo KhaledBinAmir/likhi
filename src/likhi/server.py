@@ -70,6 +70,11 @@ class SuggestService:
             return cached, False
         fut = self.pending.get(key)
         if fut is None:
+            # Earlier prefixes of the word being typed are stale: drop the ones not started yet so
+            # the single model worker gets to the current input (and to commit-time re-asks) fast.
+            for other_key, other in list(self.pending.items()):
+                if other_key != key and other.cancel():
+                    self.pending.pop(other_key, None)
             fut = self.pool.submit(self._full, roman, context, k)
             self.pending[key] = fut
             fut.add_done_callback(lambda f, key=key: self._done(key, f))
@@ -91,7 +96,7 @@ class SuggestService:
 
     def _done(self, key: tuple, fut: Future) -> None:
         self.pending.pop(key, None)
-        if fut.exception() is None:
+        if not fut.cancelled() and fut.exception() is None:
             self.full_cache[key] = fut.result()
             while len(self.full_cache) > self.cache_size:
                 self.full_cache.popitem(last=False)
