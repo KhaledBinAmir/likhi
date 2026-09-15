@@ -63,10 +63,14 @@ Requires Python 3.12 and [uv](https://docs.astral.sh/uv/).
 
 ```
 uv sync --all-extras
-uv run python scripts/fetch_datasets.py --all
-uv run likhi-eval --help
+uv run python scripts/fetch_datasets.py --all                      # datasets + IndicXlit checkpoint
+uv run python scripts/convert_indicxlit.py --src data/raw/indicxlit --npz models/indicxlit-np
+uv run likhi-data lexicon                                           # unigrams, romanizations, phonetic keys
+uv run likhi-eval words --system likhi --dataset dakshina-test      # measure
 uv run pytest
 ```
+
+Baselines and results live in `results/` and are summarized by `uv run likhi-eval report`.
 
 ## Data and model licenses
 

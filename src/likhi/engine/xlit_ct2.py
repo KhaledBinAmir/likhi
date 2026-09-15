@@ -18,7 +18,12 @@ from likhi.engine.textnorm import canonical, normalize_roman
 
 DEFAULT_MODEL_DIR = Path(__file__).resolve().parents[3] / "models" / "indicxlit-ct2"
 DEFAULT_WORD_PROB = (
-    Path(__file__).resolve().parents[3] / "data" / "raw" / "indicxlit" / "word_prob_dicts" / "ben_word_prob_dict.json"
+    Path(__file__).resolve().parents[3]
+    / "data"
+    / "raw"
+    / "indicxlit"
+    / "word_prob_dicts"
+    / "bn_word_prob_dict.json"
 )
 
 
@@ -42,7 +47,11 @@ class IndicXlitSystem:
 
         model_dir = Path(model_dir or os.environ.get("LIKHI_XLIT_MODEL", DEFAULT_MODEL_DIR))
         self.translator = ctranslate2.Translator(
-            str(model_dir), device="cpu", compute_type=compute_type, inter_threads=1, intra_threads=intra_threads
+            str(model_dir),
+            device="cpu",
+            compute_type=compute_type,
+            inter_threads=1,
+            intra_threads=intra_threads,
         )
         self.lang_token = f"__{lang}__"
         self.beam_size = beam_size
@@ -76,7 +85,9 @@ class IndicXlitSystem:
         seen: set[str] = set()
         out: list[tuple[str, float]] = []
         for toks, score in zip(res.hypotheses, res.scores, strict=True):
-            word = canonical("".join(t for t in toks if not (t.startswith("__") and t.endswith("__"))))
+            word = canonical(
+                "".join(t for t in toks if not (t.startswith("__") and t.endswith("__")))
+            )
             if not word or word in seen:
                 continue
             seen.add(word)
@@ -98,7 +109,9 @@ class IndicXlitSystem:
         lm_p = [self.word_prob.get(w, 0.0) for w, _ in hyps]
         zl = sum(lm_p)
         lm_p = [p / zl for p in lm_p] if zl > 0 else [0.0] * len(lm_p)
-        mixed = [self.alpha * m + (1 - self.alpha) * lp for m, lp in zip(model_p, lm_p, strict=True)]
+        mixed = [
+            self.alpha * m + (1 - self.alpha) * lp for m, lp in zip(model_p, lm_p, strict=True)
+        ]
         order = sorted(range(len(hyps)), key=lambda i: -mixed[i])
         return tuple(hyps[i][0] for i in order)
 

@@ -38,7 +38,10 @@ def load_checkpoint(path: Path) -> tuple[dict, dict, dict]:
         targs = dict(margs)
     if ckpt.get("cfg") is not None:
         cfg = fairseq_ckpt.to_plain(ckpt["cfg"])
-        margs = {**(cfg.get("model") or {}), **{k: v for k, v in margs.items() if k not in (cfg.get("model") or {})}}
+        margs = {
+            **(cfg.get("model") or {}),
+            **{k: v for k, v in margs.items() if k not in (cfg.get("model") or {})},
+        }
         targs = {**targs, **(cfg.get("task") or {})}
     return margs, targs, state
 
@@ -122,7 +125,11 @@ def build_spec(args: dict, state: dict, src_dict: Path, tgt_dict: Path, lang_lis
 
     def set_self_attn(attn_spec, prefix: str) -> None:
         attn_spec.linear[0].weight = np.concatenate(
-            [g(f"{prefix}.q_proj.weight"), g(f"{prefix}.k_proj.weight"), g(f"{prefix}.v_proj.weight")]
+            [
+                g(f"{prefix}.q_proj.weight"),
+                g(f"{prefix}.k_proj.weight"),
+                g(f"{prefix}.v_proj.weight"),
+            ]
         )
         attn_spec.linear[0].bias = np.concatenate(
             [g(f"{prefix}.q_proj.bias"), g(f"{prefix}.k_proj.bias"), g(f"{prefix}.v_proj.bias")]
@@ -131,8 +138,12 @@ def build_spec(args: dict, state: dict, src_dict: Path, tgt_dict: Path, lang_lis
 
     def set_cross_attn(attn_spec, prefix: str) -> None:
         set_linear(attn_spec.linear[0], f"{prefix}.q_proj")
-        attn_spec.linear[1].weight = np.concatenate([g(f"{prefix}.k_proj.weight"), g(f"{prefix}.v_proj.weight")])
-        attn_spec.linear[1].bias = np.concatenate([g(f"{prefix}.k_proj.bias"), g(f"{prefix}.v_proj.bias")])
+        attn_spec.linear[1].weight = np.concatenate(
+            [g(f"{prefix}.k_proj.weight"), g(f"{prefix}.v_proj.weight")]
+        )
+        attn_spec.linear[1].bias = np.concatenate(
+            [g(f"{prefix}.k_proj.bias"), g(f"{prefix}.v_proj.bias")]
+        )
         set_linear(attn_spec.linear[2], f"{prefix}.out_proj")
 
     max_pos = int(args.get("max_source_positions", 1024))
@@ -166,7 +177,9 @@ def build_spec(args: dict, state: dict, src_dict: Path, tgt_dict: Path, lang_lis
     if "decoder.embed_positions.weight" in state:
         dec.position_encodings.encodings = g("decoder.embed_positions.weight")[2:]
     else:
-        dec.position_encodings.encodings = sinusoidal_table(int(args.get("max_target_positions", 1024)), dim)
+        dec.position_encodings.encodings = sinusoidal_table(
+            int(args.get("max_target_positions", 1024)), dim
+        )
     if layernorm_embedding:
         set_ln(dec.layernorm_embedding, "decoder.layernorm_embedding")
     if "decoder.layer_norm.weight" in state:
@@ -197,7 +210,9 @@ def build_spec(args: dict, state: dict, src_dict: Path, tgt_dict: Path, lang_lis
     return spec, src_vocab, tgt_vocab
 
 
-def export_npz(out: Path, args: dict, state: dict, src_dict: Path, tgt_dict: Path, lang_list: Path) -> int:
+def export_npz(
+    out: Path, args: dict, state: dict, src_dict: Path, tgt_dict: Path, lang_list: Path
+) -> int:
     """Write the weights for the pure-NumPy runtime: float16 on disk, plus vocab and hyper-params."""
     lang_tokens = read_lang_tokens(lang_list)
     src_vocab = read_dict(src_dict, state["encoder.embed_tokens.weight"].shape[0], lang_tokens)
@@ -223,8 +238,12 @@ def export_npz(out: Path, args: dict, state: dict, src_dict: Path, tgt_dict: Pat
         "source": "IndicXlit v1.0 en-indic (AI4Bharat, MIT)",
     }
     (out / "config.json").write_text(json.dumps(hp, indent=1), encoding="utf-8")
-    (out / "source_vocabulary.json").write_text(json.dumps(src_vocab, ensure_ascii=False), encoding="utf-8")
-    (out / "target_vocabulary.json").write_text(json.dumps(tgt_vocab, ensure_ascii=False), encoding="utf-8")
+    (out / "source_vocabulary.json").write_text(
+        json.dumps(src_vocab, ensure_ascii=False), encoding="utf-8"
+    )
+    (out / "target_vocabulary.json").write_text(
+        json.dumps(tgt_vocab, ensure_ascii=False), encoding="utf-8"
+    )
     size = sum(p.stat().st_size for p in out.iterdir())
     print(f"wrote {out} ({size / 1e6:.1f} MB, {len(keep)} tensors)")
     return 0
@@ -238,7 +257,9 @@ def find_files(src: Path) -> tuple[Path, Path, Path, Path]:
     dicts = {p.name: p for p in src.rglob("dict.*.txt")}
     src_dict = dicts.get("dict.en.txt")
     # The target dictionaries are one shared multilingual vocabulary duplicated per language.
-    tgt_dict = dicts.get("dict.bn.txt") or next((p for n, p in dicts.items() if p is not src_dict), None)
+    tgt_dict = dicts.get("dict.bn.txt") or next(
+        (p for n, p in dicts.items() if p is not src_dict), None
+    )
     if not src_dict or not tgt_dict:
         raise SystemExit(f"could not find source/target dict.*.txt under {src}: {sorted(dicts)}")
     lang_list = next(iter(src.rglob("lang_list.txt")), None)
@@ -251,11 +272,19 @@ def find_files(src: Path) -> tuple[Path, Path, Path, Path]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--src", required=True, type=Path, help="extracted indicxlit-en-indic-v1.0 directory")
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--src", required=True, type=Path, help="extracted indicxlit-en-indic-v1.0 directory"
+    )
     ap.add_argument("--out", type=Path, default=Path("models/indicxlit-ct2"))
-    ap.add_argument("--quant", default="int8", choices=["int8", "float32", "int8_float32", "float16"])
-    ap.add_argument("--inspect", action="store_true", help="print args and tensor shapes, then exit")
+    ap.add_argument(
+        "--quant", default="int8", choices=["int8", "float32", "int8_float32", "float16"]
+    )
+    ap.add_argument(
+        "--inspect", action="store_true", help="print args and tensor shapes, then exit"
+    )
     ap.add_argument(
         "--npz",
         type=Path,
@@ -268,20 +297,50 @@ def main(argv: list[str] | None = None) -> int:
     print(f"dicts: {src_dict.name} (source), {tgt_dict.name} (target); langs: {lang_list}")
     margs, targs, state = load_checkpoint(ckpt_path)
     if args.inspect:
-        keys = ["arch", "encoder_layers", "decoder_layers", "encoder_embed_dim", "decoder_embed_dim",
-                "encoder_ffn_embed_dim", "encoder_attention_heads", "decoder_attention_heads",
-                "encoder_normalize_before", "decoder_normalize_before", "activation_fn",
-                "layernorm_embedding", "no_scale_embedding", "share_all_embeddings",
-                "share_decoder_input_output_embed", "encoder_learned_pos", "decoder_learned_pos",
-                "max_source_positions", "max_target_positions"]
+        keys = [
+            "arch",
+            "encoder_layers",
+            "decoder_layers",
+            "encoder_embed_dim",
+            "decoder_embed_dim",
+            "encoder_ffn_embed_dim",
+            "encoder_attention_heads",
+            "decoder_attention_heads",
+            "encoder_normalize_before",
+            "decoder_normalize_before",
+            "activation_fn",
+            "layernorm_embedding",
+            "no_scale_embedding",
+            "share_all_embeddings",
+            "share_decoder_input_output_embed",
+            "encoder_learned_pos",
+            "decoder_learned_pos",
+            "max_source_positions",
+            "max_target_positions",
+        ]
         print("model:", json.dumps({k: margs.get(k) for k in keys}, indent=1, default=str))
-        tkeys = ["_name", "task", "source_lang", "target_lang", "lang_pairs", "langs", "lang_dict",
-                 "encoder_langtok", "decoder_langtok", "lang_tok_style", "lang_tok_replacing_bos_eos",
-                 "langtoks_specs", "left_pad_source", "left_pad_target"]
+        tkeys = [
+            "_name",
+            "task",
+            "source_lang",
+            "target_lang",
+            "lang_pairs",
+            "langs",
+            "lang_dict",
+            "encoder_langtok",
+            "decoder_langtok",
+            "lang_tok_style",
+            "lang_tok_replacing_bos_eos",
+            "langtoks_specs",
+            "left_pad_source",
+            "left_pad_target",
+        ]
         print("task:", json.dumps({k: targs.get(k) for k in tkeys}, indent=1, default=str))
         for k, v in list(state.items())[:12]:
             print(f"  {k}: {v.shape} {v.dtype}")
-        print(f"  ... {len(state)} tensors, {sum(v.size for v in state.values()) / 1e6:.1f}M params")
+        print(
+            f"  ... {len(state)} tensors, {sum(v.size for v in state.values()) / 1e6:.1f}M params"
+        )
         return 0
 
     if args.npz:

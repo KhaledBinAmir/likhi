@@ -57,7 +57,9 @@ class WordEval:
     cer_total: float = 0.0
     n: int = 0
 
-    def add(self, candidates: Sequence[str], golds: Sequence[str], weight: float = 1.0) -> int | None:
+    def add(
+        self, candidates: Sequence[str], golds: Sequence[str], weight: float = 1.0
+    ) -> int | None:
         rank = rank_of_gold(candidates, golds)
         self.n += 1
         self.weight_total += weight

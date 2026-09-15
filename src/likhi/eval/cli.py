@@ -18,7 +18,7 @@ from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
-from likhi.engine.textnorm import has_bengali, match_key, normalize_roman
+from likhi.engine.textnorm import has_bengali, normalize_roman
 from likhi.eval import datasets as ds
 from likhi.eval.metrics import WordEval, percentile, wer
 from likhi.eval.systems import load_system
@@ -58,7 +58,9 @@ def eval_words(system_name: str, dataset: str, k: int, limit: int | None, errors
         if rank != 1:
             err_sources[it.source] += 1
             if len(misses) < errors:
-                misses.append({"roman": it.roman, "gold": list(it.golds), "got": cands[:k], "rank": rank})
+                misses.append(
+                    {"roman": it.roman, "gold": list(it.golds), "got": cands[:k], "rank": rank}
+                )
     summary = ev.summary()
     result = {
         "kind": "words",
@@ -149,7 +151,9 @@ def report() -> None:
     if not rows:
         print("no results yet")
         return
-    print(f"{'when':20} {'kind':9} {'system':10} {'dataset':28} {'n':>7} {'top1':>6} {'top3':>6} {'top5':>6} {'cer':>6} {'wer':>6} {'p95ms':>7}")
+    print(
+        f"{'when':20} {'kind':9} {'system':10} {'dataset':28} {'n':>7} {'top1':>6} {'top3':>6} {'top5':>6} {'cer':>6} {'wer':>6} {'p95ms':>7}"
+    )
     for r in rows:
         lat = r.get("latency_ms", {})
         print(
@@ -160,7 +164,11 @@ def report() -> None:
 
 
 def _print_result(r: dict) -> None:
-    keys = [k for k in ("n", "top1", "top3", "top5", "mrr", "cer", "wer", "wer_bengali_tokens") if k in r]
+    keys = [
+        k
+        for k in ("n", "top1", "top3", "top5", "mrr", "cer", "wer", "wer_bengali_tokens")
+        if k in r
+    ]
     parts = [f"{k}={r[k]:.2f}" if isinstance(r[k], float) else f"{k}={r[k]}" for k in keys]
     lat = r.get("latency_ms")
     if lat:
@@ -171,7 +179,9 @@ def _print_result(r: dict) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="likhi-eval", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        prog="likhi-eval", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     w = sub.add_parser("words", help="word-level top-k accuracy, CER, MRR, latency")
@@ -179,7 +189,9 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--dataset", action="append", required=True)
     w.add_argument("--k", type=int, default=5)
     w.add_argument("--limit", type=int)
-    w.add_argument("--errors", type=int, default=25, help="how many misses to keep in the result file")
+    w.add_argument(
+        "--errors", type=int, default=25, help="how many misses to keep in the result file"
+    )
     w.add_argument("--no-save", action="store_true")
 
     s = sub.add_parser("sentences", help="sentence-level WER with word-by-word transliteration")

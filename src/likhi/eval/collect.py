@@ -128,8 +128,12 @@ def cmd_stats(args: argparse.Namespace) -> int:
     alts = sum(1 for r in rows if len(r["gold"]) > 1)
     print(f"sentences: {len(rows)}   roman tokens: {toks}   with alternates: {alts}")
     print("tags:", dict(tags.most_common()))
-    aligned = sum(1 for r in rows if any(len(r["roman"].split()) == len(g.split()) for g in r["gold"]))
-    print(f"positionally alignable (same token count): {aligned} ({100 * aligned / len(rows):.0f}%)")
+    aligned = sum(
+        1 for r in rows if any(len(r["roman"].split()) == len(g.split()) for g in r["gold"])
+    )
+    print(
+        f"positionally alignable (same token count): {aligned} ({100 * aligned / len(rows):.0f}%)"
+    )
     return 0
 
 
@@ -146,13 +150,19 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 print(f"line {i}: gold without Bangla: {g}")
                 bad += 1
             if canonical(g) != g:
-                print(f"line {i}: gold not in canonical Unicode form (will be normalized on load): {g}")
+                print(
+                    f"line {i}: gold not in canonical Unicode form (will be normalized on load): {g}"
+                )
     print(f"{len(rows)} rows, {bad} problems")
     return 1 if bad else 0
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="likhi-collect", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        prog="likhi-collect",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("add").set_defaults(fn=cmd_add)
     p = sub.add_parser("import")

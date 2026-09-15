@@ -34,7 +34,9 @@ def _erf(x: np.ndarray) -> np.ndarray:
     sign = np.sign(x)
     a = np.abs(x)
     t = 1.0 / (1.0 + 0.3275911 * a)
-    y = 1.0 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * np.exp(-a * a)
+    y = 1.0 - (
+        ((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592
+    ) * t * np.exp(-a * a)
     return sign * y
 
 
@@ -112,7 +114,9 @@ class _DecLayer:
 class XlitTransformer:
     """Loads an exported IndicXlit bundle (see scripts/convert_indicxlit.py --npz) and decodes words."""
 
-    def __init__(self, model_dir: Path | str = DEFAULT_MODEL_DIR, *, max_positions: int = 256) -> None:
+    def __init__(
+        self, model_dir: Path | str = DEFAULT_MODEL_DIR, *, max_positions: int = 256
+    ) -> None:
         model_dir = Path(model_dir)
         cfg = json.loads((model_dir / "config.json").read_text(encoding="utf-8"))
         self.cfg = cfg
@@ -122,8 +126,12 @@ class XlitTransformer:
         self.pre_norm = bool(cfg["pre_norm"])
         self.act = gelu if cfg["activation"].startswith("gelu") else relu
         self.embed_scale = math.sqrt(self.dim) if cfg.get("scale_embedding", True) else 1.0
-        self.src_vocab: list[str] = json.loads((model_dir / "source_vocabulary.json").read_text(encoding="utf-8"))
-        self.tgt_vocab: list[str] = json.loads((model_dir / "target_vocabulary.json").read_text(encoding="utf-8"))
+        self.src_vocab: list[str] = json.loads(
+            (model_dir / "source_vocabulary.json").read_text(encoding="utf-8")
+        )
+        self.tgt_vocab: list[str] = json.loads(
+            (model_dir / "target_vocabulary.json").read_text(encoding="utf-8")
+        )
         self.src_index = {t: i for i, t in enumerate(self.src_vocab)}
         self.tgt_index = {t: i for i, t in enumerate(self.tgt_vocab)}
         self.pad = self.tgt_index["<pad>"]
@@ -139,35 +147,55 @@ class XlitTransformer:
         self.out_proj = f.get("decoder.output_projection.weight", self.dec_embed)
         self.pos = sinusoidal(max_positions, self.dim, int(cfg.get("padding_idx", 1)))
         self.pos_offset = int(cfg.get("padding_idx", 1)) + 1
-        self.enc_ln_emb = (f.get("encoder.layernorm_embedding.weight"), f.get("encoder.layernorm_embedding.bias"))
-        self.dec_ln_emb = (f.get("decoder.layernorm_embedding.weight"), f.get("decoder.layernorm_embedding.bias"))
+        self.enc_ln_emb = (
+            f.get("encoder.layernorm_embedding.weight"),
+            f.get("encoder.layernorm_embedding.bias"),
+        )
+        self.dec_ln_emb = (
+            f.get("decoder.layernorm_embedding.weight"),
+            f.get("decoder.layernorm_embedding.bias"),
+        )
         self.enc_ln = (f.get("encoder.layer_norm.weight"), f.get("encoder.layer_norm.bias"))
         self.dec_ln = (f.get("decoder.layer_norm.weight"), f.get("decoder.layer_norm.bias"))
 
         def attn(p: str, ln: str) -> _Attn:
             return _Attn(
-                f[f"{p}.q_proj.weight"].T.copy(), f[f"{p}.q_proj.bias"],
-                f[f"{p}.k_proj.weight"].T.copy(), f[f"{p}.k_proj.bias"],
-                f[f"{p}.v_proj.weight"].T.copy(), f[f"{p}.v_proj.bias"],
-                f[f"{p}.out_proj.weight"].T.copy(), f[f"{p}.out_proj.bias"],
-                f[f"{ln}.weight"], f[f"{ln}.bias"],
+                f[f"{p}.q_proj.weight"].T.copy(),
+                f[f"{p}.q_proj.bias"],
+                f[f"{p}.k_proj.weight"].T.copy(),
+                f[f"{p}.k_proj.bias"],
+                f[f"{p}.v_proj.weight"].T.copy(),
+                f[f"{p}.v_proj.bias"],
+                f[f"{p}.out_proj.weight"].T.copy(),
+                f[f"{p}.out_proj.bias"],
+                f[f"{ln}.weight"],
+                f[f"{ln}.bias"],
             )
 
         def ffn(p: str) -> _FFN:
             return _FFN(
-                f[f"{p}.fc1.weight"].T.copy(), f[f"{p}.fc1.bias"],
-                f[f"{p}.fc2.weight"].T.copy(), f[f"{p}.fc2.bias"],
-                f[f"{p}.final_layer_norm.weight"], f[f"{p}.final_layer_norm.bias"],
+                f[f"{p}.fc1.weight"].T.copy(),
+                f[f"{p}.fc1.bias"],
+                f[f"{p}.fc2.weight"].T.copy(),
+                f[f"{p}.fc2.bias"],
+                f[f"{p}.final_layer_norm.weight"],
+                f[f"{p}.final_layer_norm.bias"],
             )
 
         self.enc_layers = [
-            _EncLayer(attn(f"encoder.layers.{i}.self_attn", f"encoder.layers.{i}.self_attn_layer_norm"), ffn(f"encoder.layers.{i}"))
+            _EncLayer(
+                attn(f"encoder.layers.{i}.self_attn", f"encoder.layers.{i}.self_attn_layer_norm"),
+                ffn(f"encoder.layers.{i}"),
+            )
             for i in range(int(cfg["encoder_layers"]))
         ]
         self.dec_layers = [
             _DecLayer(
                 attn(f"decoder.layers.{i}.self_attn", f"decoder.layers.{i}.self_attn_layer_norm"),
-                attn(f"decoder.layers.{i}.encoder_attn", f"decoder.layers.{i}.encoder_attn_layer_norm"),
+                attn(
+                    f"decoder.layers.{i}.encoder_attn",
+                    f"decoder.layers.{i}.encoder_attn_layer_norm",
+                ),
                 ffn(f"decoder.layers.{i}"),
             )
             for i in range(int(cfg["decoder_layers"]))
@@ -185,7 +213,9 @@ class XlitTransformer:
         *lead, _h, t, _d = x.shape
         return x.swapaxes(-3, -2).reshape(*lead, t, self.dim)
 
-    def _attend(self, q: np.ndarray, k: np.ndarray, v: np.ndarray, causal: bool = False) -> np.ndarray:
+    def _attend(
+        self, q: np.ndarray, k: np.ndarray, v: np.ndarray, causal: bool = False
+    ) -> np.ndarray:
         # q: (..., h, Tq, d), k/v: (..., h, Tk, d)
         s = q @ k.swapaxes(-1, -2)
         if causal:
@@ -198,7 +228,10 @@ class XlitTransformer:
         return p @ v
 
     def _encode(self, src_ids: list[int]) -> tuple[np.ndarray, list[tuple[np.ndarray, np.ndarray]]]:
-        x = self.embed_scale * self.enc_embed[src_ids] + self.pos[self.pos_offset : self.pos_offset + len(src_ids)]
+        x = (
+            self.embed_scale * self.enc_embed[src_ids]
+            + self.pos[self.pos_offset : self.pos_offset + len(src_ids)]
+        )
         if self.enc_ln_emb[0] is not None:
             x = layer_norm(x, *self.enc_ln_emb)
         for L in self.enc_layers:
@@ -233,7 +266,10 @@ class XlitTransformer:
         cache: list[list[np.ndarray] | None],  # per layer: [K (B,h,t,d), V (B,h,t,d)] or None
         enc_kv: list[tuple[np.ndarray, np.ndarray]],
     ) -> np.ndarray:
-        x = self.embed_scale * self.dec_embed[tok][:, None, :] + self.pos[self.pos_offset + step][None, None, :]
+        x = (
+            self.embed_scale * self.dec_embed[tok][:, None, :]
+            + self.pos[self.pos_offset + step][None, None, :]
+        )
         if self.dec_ln_emb[0] is not None:
             x = layer_norm(x, *self.dec_ln_emb)
         for i, L in enumerate(self.dec_layers):
@@ -270,6 +306,82 @@ class XlitTransformer:
         logits = x[:, 0, :] @ self.out_proj.T
         return log_softmax(logits)
 
+    def _decode_full(
+        self, tgt: np.ndarray, enc_kv: list[tuple[np.ndarray, np.ndarray]]
+    ) -> np.ndarray:
+        """Teacher-forced decoder pass over whole sequences. tgt: (B, T) input ids -> (B, T, V) log-probs."""
+        b, t = tgt.shape
+        x = (
+            self.embed_scale * self.dec_embed[tgt]
+            + self.pos[self.pos_offset : self.pos_offset + t][None]
+        )
+        if self.dec_ln_emb[0] is not None:
+            x = layer_norm(x, *self.dec_ln_emb)
+        for i, L in enumerate(self.dec_layers):
+            a = L.self_attn
+            h = layer_norm(x, a.ln_g, a.ln_b) if self.pre_norm else x
+            q = self._split((h @ a.wq + a.bq) * self.scaling)
+            k = self._split(h @ a.wk + a.bk)
+            v = self._split(h @ a.wv + a.bv)
+            h = self._merge(self._attend(q, k, v, causal=True)) @ a.wo + a.bo
+            x = x + h
+            if not self.pre_norm:
+                x = layer_norm(x, a.ln_g, a.ln_b)
+            c = L.cross
+            h = layer_norm(x, c.ln_g, c.ln_b) if self.pre_norm else x
+            q = self._split((h @ c.wq + c.bq) * self.scaling)
+            ek, ev = enc_kv[i]
+            h = self._merge(self._attend(q, ek[None], ev[None])) @ c.wo + c.bo
+            x = x + h
+            if not self.pre_norm:
+                x = layer_norm(x, c.ln_g, c.ln_b)
+            fnn = L.ffn
+            h = layer_norm(x, fnn.ln_g, fnn.ln_b) if self.pre_norm else x
+            h = self.act(h @ fnn.w1 + fnn.b1) @ fnn.w2 + fnn.b2
+            x = x + h
+            if not self.pre_norm:
+                x = layer_norm(x, fnn.ln_g, fnn.ln_b)
+        if self.dec_ln[0] is not None:
+            x = layer_norm(x, *self.dec_ln)
+        return log_softmax(x @ self.out_proj.T)
+
+    def score_candidates(self, roman: str, words: Sequence[str], *, lang: str = "bn") -> np.ndarray:
+        """log P(word | roman) for each word (sum over characters incl. </s>), in one batched pass.
+
+        Words containing characters outside the target vocabulary get -inf.
+        """
+        if not words:
+            return np.zeros(0, dtype=np.float32)
+        src = self.encode_source(roman, lang)
+        _, enc_kv = self._encode(src)
+        ids: list[list[int]] = []
+        ok = np.ones(len(words), dtype=bool)
+        for i, w in enumerate(words):
+            seq = []
+            for ch in w:
+                j = self.tgt_index.get(ch)
+                if j is None:
+                    ok[i] = False
+                    break
+                seq.append(j)
+            ids.append(seq + [self.eos])
+        t = max(len(s) for s in ids)
+        b = len(ids)
+        inp = np.full((b, t), self.pad, dtype=np.int64)
+        out = np.full((b, t), self.pad, dtype=np.int64)
+        inp[:, 0] = self.eos
+        for i, s in enumerate(ids):
+            n = len(s)
+            out[i, :n] = s
+            if n > 1:
+                inp[i, 1:n] = s[:-1]
+        lp = self._decode_full(inp, enc_kv)  # (B, T, V)
+        gathered = np.take_along_axis(lp, out[:, :, None], axis=2)[:, :, 0]
+        mask = out != self.pad
+        total = (gathered * mask).sum(axis=1)
+        total[~ok] = -np.inf
+        return total.astype(np.float32)
+
     # ------------------------------------------------------------------ public API
 
     def encode_source(self, roman: str, lang: str = "bn") -> list[int]:
@@ -279,7 +391,14 @@ class XlitTransformer:
         return ids
 
     def beam_search(
-        self, roman: str, *, lang: str = "bn", beam: int = 4, nbest: int | None = None, max_len: int | None = None, lenpen: float = 1.0
+        self,
+        roman: str,
+        *,
+        lang: str = "bn",
+        beam: int = 4,
+        nbest: int | None = None,
+        max_len: int | None = None,
+        lenpen: float = 1.0,
     ) -> list[tuple[str, float]]:
         """Return [(word, normalized_log_prob)] best first. Scores are fairseq-style: sum / len**lenpen."""
         nbest = nbest or beam
@@ -346,7 +465,9 @@ class XlitTransformer:
                     cache[i][0] = cache[i][0][sel]
                     cache[i][1] = cache[i][1][sel]
         if not finished:  # ran out of length: take live hyps
-            finished = [(float(s) / (max_len**lenpen), q) for s, q in zip(scores, seqs, strict=True)]
+            finished = [
+                (float(s) / (max_len**lenpen), q) for s, q in zip(scores, seqs, strict=True)
+            ]
         finished.sort(key=lambda x: -x[0])
         out: list[tuple[str, float]] = []
         seen: set[str] = set()
@@ -380,8 +501,21 @@ class IndicXlitNumpySystem:
         self.alpha = alpha
         self.word_prob: dict[str, float] | None = None
         if rescore:
-            p = Path(word_prob_path or (Path(model_dir).parents[1] / "data" / "raw" / "indicxlit" / "word_prob_dicts" / "ben_word_prob_dict.json"))
-            self.word_prob = {canonical(k): float(v) for k, v in json.loads(Path(p).read_text(encoding="utf-8")).items()}
+            p = Path(
+                word_prob_path
+                or (
+                    Path(model_dir).parents[1]
+                    / "data"
+                    / "raw"
+                    / "indicxlit"
+                    / "word_prob_dicts"
+                    / "bn_word_prob_dict.json"
+                )
+            )
+            self.word_prob = {
+                canonical(k): float(v)
+                for k, v in json.loads(Path(p).read_text(encoding="utf-8")).items()
+            }
             self.name = "indicxlit-np+rerank"
         self._cached = lru_cache(maxsize=cache_size)(self._suggest)
 
