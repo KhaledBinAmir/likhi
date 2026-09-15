@@ -146,7 +146,10 @@ def aksharantar(
 
 # ------------------------------------------------------------------------------------- BanglaTLit
 
-_RE_TOKEN_PUNCT = re.compile(r"^[\W_]+|[\W_]+$", re.UNICODE)
+# Python's \w does not cover combining marks, so a naive [\W]+$ strip would cut the final vowel
+# sign off Bengali words (কিন্তু -> কিন্ত). Treat the whole Bengali block plus the joiners as word
+# characters and only strip real punctuation/symbols at the edges.
+_RE_TOKEN_PUNCT = re.compile(r"^[^\wঀ-৿‌‍]+|[^\wঀ-৿‌‍]+$")
 _RE_LATIN_ONLY = re.compile(r"^[A-Za-z']+$")
 
 
