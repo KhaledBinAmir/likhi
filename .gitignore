@@ -16,7 +16,7 @@ htmlcov/
 data/raw/
 data/processed/
 data/cache/
-models/
+models/*
 !models/lexicon/
 models/lexicon/*
 !models/lexicon/weights.json
