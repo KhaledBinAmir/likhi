@@ -35,7 +35,21 @@ personalization store, bigram context table, engine server, PIME text-service sk
 
 The last row trades Dakshina top-1 for much higher recall everywhere (top-5 +8 points on Dakshina,
 Aksharantar top-1 +12); the weights were tuned before these features existed, so a re-tune on
-habit-augmented dev data is running.
+habit-augmented dev data followed.
+
+### Weight selection, 2026-09-16 evening (first 2,500 items of each set; feedback = 17 words)
+
+| Weights | chat top-1/top-5 | Dakshina top-1/top-5 | Aksharantar top-1/top-5 | feedback | stress, all habits / dropped vowels |
+|---|---|---|---|---|---|
+| habit-retuned (keys heavy, model vote 0) | 88.3 / 95.5 | 66.8 / 88.9 | 49.8 / 66.8 (4000) | 14/17 | **61.9 / 58.5** |
+| blend A | 87.9 / 96.5 | 67.8 / 90.1 | 63.8 / 79.2 | 16/17 | 58.1 / 49.7 |
+| blend B | 90.1 / 96.4 | 66.9 / 90.4 | 63.6 / 79.6 | 16/17 | 57.4 / 47.8 |
+| **blend C = B + corrected য় keys + acronym guard (deployed)** | **90.3 / 96.5** | 67.0 / 90.6 | 63.4 / 79.5 | 16/17 | 57.3 / 49.3 |
+
+Real typing data (chat words, feedback) outranks synthetic habits, so blend C ships. The open
+item: the key-heavy weights are 9 points better on dropped-vowel shorthand; a vowel-ratio gate does
+not separate shorthand from English loanwords, so the next tuning round needs another signal
+(per-input-style tuning with as-is items up-weighted, or a learned gate).
 
 Published for reference: IndicXlit 55.4 top-1 (69.4 with rerank), Google 2020 transformer 49.4.
 
