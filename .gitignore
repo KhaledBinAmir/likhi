@@ -17,6 +17,9 @@ data/raw/
 data/processed/
 data/cache/
 models/
+!models/lexicon/
+models/lexicon/*
+!models/lexicon/weights.json
 *.tar
 *.zip
 *.bz2
