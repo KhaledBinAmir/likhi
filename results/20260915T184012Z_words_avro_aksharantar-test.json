@@ -1,0 +1,109 @@
+{
+ "kind": "words",
+ "system": "avro",
+ "dataset": "aksharantar-test",
+ "k": 5,
+ "n": 14167,
+ "top1": 11.999717653702266,
+ "top3": 11.999717653702266,
+ "top5": 11.999717653702266,
+ "mrr": 0.11999717653702266,
+ "cer": 36.24091841419328,
+ "latency_ms": {
+  "p50": 0.621700004558079,
+  "p95": 1.3795000049867667,
+  "p99": 2.405699997325428,
+  "mean": 0.7163143855234541
+ },
+ "elapsed_s": 10.716435100002855,
+ "git": "unknown",
+ "when": "2026-09-15T18:40:12+00:00",
+ "miss_by_source": {
+  "AK-Freq": 2203,
+  "AK-NEF": 925,
+  "AK-NEI": 1306,
+  "Dakshina": 8033
+ },
+ "sample_misses": [
+  {
+   "roman": "pratisangkhyaay",
+   "gold": [
+    "প্রতিসংখ্যায়"
+   ],
+   "got": [
+    "প্রাতিসাংখ্যাআয়"
+   ],
+   "rank": null
+  },
+  {
+   "roman": "atishth",
+   "gold": [
+    "অতিষ্ঠ"
+   ],
+   "got": [
+    "আতিশ্তহ"
+   ],
+   "rank": null
+  },
+  {
+   "roman": "akalpaneey",
+   "gold": [
+    "অকল্পনীয়"
+   ],
+   "got": [
+    "আকাল্পানীয়"
+   ],
+   "rank": null
+  },
+  {
+   "roman": "anter",
+   "gold": [
+    "অ্যান্টের"
+   ],
+   "got": [
+    "আন্তের"
+   ],
+   "rank": null
+  },
+  {
+   "roman": "chhaikhul",
+   "gold": [
+    "ছাইখুল"
+   ],
+   "got": [
+    "ছহাইখুল"
+   ],
+   "rank": null
+  },
+  {
+   "roman": "bipadaseemaar",
+   "gold": [
+    "বিপদসীমার"
+   ],
+   "got": [
+    "বিপাদাসীমাআর"
+   ],
+   "rank": null
+  },
+  {
+   "roman": "janmaashtaamee",
+   "gold": [
+    "জন্মাষ্টামী"
+   ],
+   "got": [
+    "জান্মাআশ্তাআমী"
+   ],
+   "rank": null
+  },
+  {
+   "roman": "naayikaader",
+   "gold": [
+    "নায়িকাদের"
+   ],
+   "got": [
+    "নাআয়িকাআদের"
+   ],
+   "rank": null
+  }
+ ]
+}

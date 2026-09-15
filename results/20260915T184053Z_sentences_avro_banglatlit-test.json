@@ -1,0 +1,39 @@
+{
+ "kind": "sentences",
+ "system": "avro",
+ "dataset": "banglatlit-test",
+ "n": 2500,
+ "wer": 79.36587433062373,
+ "wer_bengali_tokens": 79.39992257065428,
+ "ref_tokens": 25957,
+ "elapsed_s": 8.70429570000124,
+ "git": "unknown",
+ "when": "2026-09-15T18:40:53+00:00",
+ "sample_misses": [
+  {
+   "roman": "Tnx bro ato sundor akta gift dewar jonno",
+   "gold": "থ্যাংক্স ব্রো এত সুন্দর একটা গিফট দেওয়ার জন্য",
+   "hyp": "ত্নক্স ব্র আত সুন্দর আক্তা গিফত দেওার জন্ন"
+  },
+  {
+   "roman": "hmm playstore upddate den",
+   "gold": "হুম প্লেস্টোর আপডেট দেন",
+   "hyp": "হ্মম প্লায়স্টোর উপদ্দাতে দেন"
+  },
+  {
+   "roman": "kahini ache, jane but korena……… kichu add korechi",
+   "gold": "কাহিনী আছে , জানে বাট করেনা ……… কিছু অ্যাড করেছি",
+   "hyp": "কাহিনি আছে জানে বুত করেনা কিছু আদ্দ করেছি"
+  },
+  {
+   "roman": "kintu vai easy net to chole na. web tunnel. othoba. http injector diye ki easy net chara config file kaj kore na? tar upor to akhn droid vpn o config support korce…. parle apnar fb id link ta diyen…",
+   "gold": "কিন্তু ভাই ইসি নেট তো চলে না। ওয়েব টানেল। অথবা। এইচটিটিপি ইনজ্যাক্টর দিয়ে কি ইসি নেট ছাড়া কনফিগ ফাইল কাজ করে না? তার উপর তো এখন ড্রোইড ভিপিএন ও কনফিগ সাপোর্ট করসে…. পারলে আপনার এফবি আইডি লিংক টা দিয়েন…",
+   "hyp": "কিন্তু ভাই এয়াস্য নেত ত ছলে না ওয়েব তুন্নেল অথবা হত্তপ ইঞ্জেচতর দিয়ে কি এয়াস্য নেত ছারা চনফিগ ফাইল কাজ করে না তার উপর ত আখন দ্রইদ ভপ্ন অ চনফিগ সুপ্পরত করচে পারলে আপ্নার ফব ইদ লিঙ্ক তা দিইয়েন"
+  },
+  {
+   "roman": "apnar ta koto?",
+   "gold": "আপনার টা কত ?",
+   "hyp": "আপ্নার তা কত"
+  }
+ ]
+}

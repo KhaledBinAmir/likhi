@@ -1,0 +1,106 @@
+{
+ "kind": "words",
+ "system": "avro",
+ "dataset": "dakshina-test+grouped",
+ "k": 5,
+ "n": 9146,
+ "top1": 18.221641561635412,
+ "top3": 18.221641561635412,
+ "top5": 18.221641561635412,
+ "mrr": 0.18221641561635413,
+ "cer": 32.57444231220694,
+ "latency_ms": {
+  "p50": 0.6285000054049306,
+  "p95": 1.3671999986399896,
+  "p99": 2.2170000011101365,
+  "mean": 0.7218496391939824
+ },
+ "elapsed_s": 6.956438599998364,
+ "git": "unknown",
+ "when": "2026-09-15T18:40:01+00:00",
+ "miss_by_source": {
+  "dakshina": 7974
+ },
+ "sample_misses": [
+  {
+   "roman": "anri",
+   "gold": [
+    "অঁরি"
+   ],
+   "got": [
+    "আন্রি"
+   ],
+   "rank": null
+  },
+  {
+   "roman": "aunry",
+   "gold": [
+    "অঁরি"
+   ],
+   "got": [
+    "আউন্র্য"
+   ],
+   "rank": null
+  },
+  {
+   "roman": "onry",
+   "gold": [
+    "অঁরি"
+   ],
+   "got": [
+    "অন্র্য"
+   ],
+   "rank": null
+  },
+  {
+   "roman": "ori",
+   "gold": [
+    "অঁরি"
+   ],
+   "got": [
+    "অরি"
+   ],
+   "rank": null
+  },
+  {
+   "roman": "angsagrohonkari",
+   "gold": [
+    "অংশগ্রহনকারী"
+   ],
+   "got": [
+    "আংসাগ্রহঙ্কারি"
+   ],
+   "rank": null
+  },
+  {
+   "roman": "angshogrohonkari",
+   "gold": [
+    "অংশগ্রহনকারী"
+   ],
+   "got": [
+    "আংশগ্রহঙ্কারি"
+   ],
+   "rank": null
+  },
+  {
+   "roman": "angsogrohonkari",
+   "gold": [
+    "অংশগ্রহনকারী"
+   ],
+   "got": [
+    "আংসগ্রহঙ্কারি"
+   ],
+   "rank": null
+  },
+  {
+   "roman": "anshograhankari",
+   "gold": [
+    "অংশগ্রহনকারী"
+   ],
+   "got": [
+    "আনশগ্রাহাঙ্কারি"
+   ],
+   "rank": null
+  }
+ ]
+}

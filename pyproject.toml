@@ -33,6 +33,8 @@ eval = [
 
 [dependency-groups]
 dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.10"]
+# One-time model conversion (IndicXlit fairseq checkpoint -> CTranslate2). Never shipped to users.
+convert = ["torch>=2.2", "omegaconf>=2.3"]
 
 [project.scripts]
 likhi-eval = "likhi.eval.cli:main"
