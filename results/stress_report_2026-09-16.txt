@@ -1,0 +1,128 @@
+﻿source     style             n   top1   top5
+ALL        ALL           33187   56.9   78.8
+ALL        a_for_o        3017   51.4   81.8
+ALL        as_is          3017   68.5   87.7
+ALL        c_for_ch       3017   66.3   86.9
+ALL        caps           3017   68.5   87.7
+ALL        double         3017   57.5   84.1
+ALL        drop_vowels    3017   46.0   76.0
+ALL        no_h           3017   57.9   83.6
+ALL        s_for_sh       3017   67.0   87.0
+ALL        typo           3017    9.4   20.6
+ALL        v_for_bh       3017   67.3   86.7
+ALL        y_for_j        3017   66.3   85.0
+chat       ALL           16500   62.7   77.5
+chat       a_for_o        1500   58.0   79.3
+chat       as_is          1500   72.8   85.5
+chat       c_for_ch       1500   71.3   84.7
+chat       caps           1500   72.8   85.5
+chat       double         1500   64.8   81.9
+chat       drop_vowels    1500   54.7   75.6
+chat       no_h           1500   65.9   83.1
+chat       s_for_sh       1500   71.9   85.0
+chat       typo           1500   15.3   24.9
+chat       v_for_bh       1500   71.6   84.3
+chat       y_for_j        1500   70.5   83.2
+dakshina   ALL           16500   51.0   80.1
+dakshina   a_for_o        1500   44.6   84.2
+dakshina   as_is          1500   63.9   89.8
+dakshina   c_for_ch       1500   61.3   89.1
+dakshina   caps           1500   63.9   89.8
+dakshina   double         1500   50.0   86.2
+dakshina   drop_vowels    1500   37.4   76.7
+dakshina   no_h           1500   49.9   84.3
+dakshina   s_for_sh       1500   61.7   88.9
+dakshina   typo           1500    3.6   16.3
+dakshina   v_for_bh       1500   62.7   88.9
+dakshina   y_for_j        1500   61.7   86.6
+feedback   ALL             187   73.8   81.3
+feedback   a_for_o          17   70.6   82.4
+feedback   as_is            17  100.0  100.0
+feedback   c_for_ch         17   70.6   82.4
+feedback   caps             17  100.0  100.0
+feedback   double           17   70.6   88.2
+feedback   drop_vowels      17   41.2   58.8
+feedback   no_h             17   58.8   64.7
+feedback   s_for_sh         17   94.1  100.0
+feedback   typo             17    5.9   17.6
+feedback   v_for_bh         17  100.0  100.0
+feedback   y_for_j          17  100.0  100.0
+
+Habits that break words the engine otherwise gets right (gold missing from top-5):
+  typo         1543
+      mitheena -> mitheeha: got ['মিঠিহা', 'মিথেহা', 'মিঠেহা'] wanted ['মিথেন']
+      hiushton -> hiushtpn: got ['হিউস্টপিএন', 'হিউশ্টপিএন', 'হিউস্টপন'] wanted ['হিউস্টন']
+      niropekshta -> noropekshta: got ['নরপেক্ষ্টা', 'নরপেক্ষটা', 'নরপেক্ষ্ট'] wanted ['নিরপেক্ষতা']
+      shaalem -> shqalem: got ['স্কলেম', 'স্কালেম', 'শিখলাম'] wanted ['সালেম']
+      ayasheta -> ayashega: got ['আয়াশেগা', 'অ্যাশেগা', 'আসিগা'] wanted ['অ্যাসেট']
+      shpot -> sjpot: got ['সজপত', 'সজপট', 'সজপোট'] wanted ['স্পট']
+  drop_vowels  238
+      argentinake -> argentinke: got ['আর্জেন্টিনকে', 'আর্জেনটিনকে', 'আর্জেন্তিনকে'] wanted ['আর্জেন্টিনাকে']
+      chhanader -> chhnder: got ['ছন্দের', 'চন্দ্র', 'চন্দ্রের'] wanted ['ছানাদের']
+      dhyaney -> dhyney: got ['ডাইনি', 'দিনে', 'ধনী'] wanted ['ধ্যানে']
+      dhoraar -> dhrr: got ['ধর', 'দের', 'ধুর'] wanted ['ধরার']
+      sritifalok -> sritiflk: got ['সৃতিফল্ক', 'শ্রীতিফল্ক', 'স্রীতিফল্ক'] wanted ['স্মৃতিফলক']
+      vishoi -> vishi: got ['ভিশি', 'বেশি', 'বিশি'] wanted ['বিষয়']
+  a_for_o      125
+      ayasheta -> ayosheta: got ['আয়োশেট', 'আয়োশেতা', 'ওয়েস্ট'] wanted ['অ্যাসেট']
+      young -> yaung: got ['ইয়াং', 'যাউং', 'না'] wanted ['ইয়ং']
+      wooder -> waader: got ['ওয়াডের', 'ওয়াদের', 'ওদের'] wanted ['উডের']
+      jonaal -> jonaol: got ['জোনাওল', 'জনাওল', 'জানল'] wanted ['জোনাল']
+      halall -> holall: got ['হোলাল', 'হল', 'হাল'] wanted ['হালাল']
+      wook -> waok: got ['ওয়াওক', 'ওয়াক', 'ওকে'] wanted ['উক']
+  no_h         90
+      gunphol -> gunpol: got ['গুনপোল', 'গুণপোল', 'গানপোল'] wanted ['গুণফল']
+      ribhishhan -> ribishhan: got ['রিবিশন', 'রিবিশান', 'রিবিসন'] wanted ['রিভিশন']
+      shakkhyer -> shakkyer: got ['শাক্যের', 'শক্যের', 'শিকার'] wanted ['সাক্ষ্যের']
+      phals -> pals: got ['পালস', 'পলস', 'প্যালেস'] wanted ['ফলস']
+      bhetoo -> betoo: got ['বেতু', 'বাট', 'বেতো'] wanted ['ভেটো']
+      akkharguli -> akkarguli: got ['আক্করগুলি', 'আক্কারগুলি', 'অক্করগুলি'] wanted ['অক্ষরগুলি']
+  double       83
+      badan -> baadan: got ['বাদন', 'বাদান', 'বাধন'] wanted ['বদন']
+      bonjangale -> bonjaangaale: got ['বনজাঙ্গালে', 'বনজাঙালে', 'বনজাঙ্গাল'] wanted ['বনজঙ্গলে']
+      bangoposagare -> baangoposagaare: got ['বাঙ্গোপসগারে', 'বাঙ্গোপসাগারে', 'বাংগোপসগারে'] wanted ['বঙ্গোপসাগরে']
+      thhyaang -> thhyaaaang: got ['ঠ্যায়াআং', 'ঠ্যাআং', 'ঠ্যায়াং'] wanted ['ঠ্যাং']
+      item -> iitem: got ['আইআইটিএম', 'ইয়াতীম', 'আইআইটেএম'] wanted ['আইটেম']
+      oitijhyogata -> oiitiijhyogaata: got ['ঐতিহ্যগাত', 'ঐতিহ্যগাতা', 'ঐটিইঝ্যগাত'] wanted ['ঐতিহ্যগত']
+  y_for_j      61
+      rajotwer -> rayotwer: got ['রায়ত্বের', 'রায়োত্বের', 'রাইটার'] wanted ['রাজত্বের']
+      jonoshon -> yonoshon: got ['যোনোশন', 'নেশন', 'নিসন'] wanted ['জনসন']
+      jogodish -> yogodish: got ['যোগদিশ', 'যোগোদিশ', 'যোগদীশ'] wanted ['জগদীশ']
+      mehnaaj -> mehnaay: got ['মেহনায়', 'মোহনায়', 'মহান'] wanted ['মেহনাজ']
+      ajante -> ayante: got ['অ্যান্টে', 'অ্যান্টি', 'আনতে'] wanted ['অজান্তে']
+      projanma -> proyanma: got ['প্রয়ানমা', 'প্রয়াণমা', 'প্রয়ান্মা'] wanted ['প্রজন্ম']
+  v_for_bh     24
+      rower -> rooer: got ['রোয়ার', 'রোয়ের', 'রোর'] wanted ['রোভার']
+      twakke -> toakke: got ['টোককে', 'তোয়াককে', 'তোকে'] wanted ['ত্বককে']
+      how -> hoo: got ['হো', 'হু', 'হও'] wanted ['হাউ']
+      software -> softoare: got ['সফতোয়ারে', 'সফটওয়ারে', 'সফটওয়ার'] wanted ['সফটওয়্যার']
+      wright -> oright: got ['ওরাইট', 'অরাইট', 'ওরাইটের'] wanted ['রাইট']
+      bhanta -> vanta: got ['ভান্টা', 'ভান্তা', 'ভ্যানটা'] wanted ['ভাঁটা']
+  c_for_ch     17
+      patch -> patc: got ['পিএটিসি', 'পাইতেছি', 'পেতেছি'] wanted ['প্যাচ']
+      much -> muc: got ['মাক', 'ম্যাচ', 'মুক'] wanted ['মাচ']
+      khaicho -> khaico: got ['খাইকো', 'কাছে', 'কাঁচা'] wanted ['খাইছো']
+      choudhori -> coudhori: got ['চৌধুরী', 'কাউধরি', 'কৌধরী'] wanted ['চৌধরী']
+      choityr -> coityr: got ['কয়টির', 'কইটির', 'চৈত্র'] wanted ['চৈতির']
+      choudhri -> coudhri: got ['চৌধুরী', 'চৌধুরি', 'কৌধ্রী'] wanted ['চৌধরী']
+  s_for_sh     13
+      kreeshijomi -> kreesijomi: got ['ক্রিসিজমি', 'ক্রেসিজমি', 'ক্রিসিজোমি'] wanted ['কৃষিজমি']
+      dyanisha -> dyanisa: got ['ড্যানিস', 'ডেনিস', 'ড্যান্স'] wanted ['ড্যানিশ']
+      massage -> masage: got ['মেসেজ', 'মেসেজে', 'মাসেজ'] wanted ['ম্যাসেজ']
+      ssl -> sl: got ['এসএল', 'সেল', 'সাল'] wanted ['এসএসএল']
+      gheesha -> gheesa: got ['গেস', 'ঘষা', 'গ্যাস'] wanted ['ঘেষা']
+      drissoti -> drisoti: got ['দৃশটি', 'দৃশতি', 'দৃষটি'] wanted ['দৃশ্যটি']
+
+Plain-form words with gold outside top-5: 371
+      puush: got ['পুশ', 'পুস', 'পুষ'] wanted ['পিউস']
+      traikbal: got ['ট্রাইকবল', 'ট্রেকবল', 'ট্রেকবাল'] wanted ['ট্র্যাকবল']
+      yaung: got ['ইয়াং', 'যাউং', 'না'] wanted ['ইয়ং']
+      shakkho: got ['সাক্ষ', 'শাক্ষ', 'শেখ'] wanted ['সাক্ষ্য']
+      bayaqat: got ['বায়াকত', 'ব্যক্ত', 'বিখ্যাত'] wanted ['বয়কট']
+      radar: got ['রাদার', 'রাডার', 'রডার'] wanted ['রাডারে']
+      gheesa: got ['গেস', 'ঘষা', 'গ্যাস'] wanted ['ঘেষা']
+      tookke: got ['টুককে', 'তোকে', 'থাকুক'] wanted ['ত্বককে']
+      barin: got ['বারিন', 'বেরিন', 'বরণ'] wanted ['বারীণ']
+      bongopsagore: got ['বঙ্গোপসাগর', 'বঙ্গপসাগরে', 'বংগোপসাগরে'] wanted ['বঙ্গোপসাগরে']
+      poos: got ['পুস', 'পোস', 'পুশ'] wanted ['পিউস']
+      tottoba: got ['তত্ত্ববা', 'তবে', 'তভ'] wanted ['তওবা']

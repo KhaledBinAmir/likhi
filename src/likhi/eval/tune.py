@@ -29,13 +29,27 @@ CACHE = REPO / "data" / "cache" / "tune_features.pkl"
 WEIGHTS_OUT = REPO / "models" / "lexicon" / "weights.json"
 
 
-def _load_items(spec: str, seed: int = 13):
+def _load_items(spec: str, seed: int = 13, augment: list[str] | None = None):
+    """``spec`` = name[:sample]. With ``augment``, each item is also rewritten in the given typing
+    habits (see likhi.eval.stress.STYLES) so the tuned weights reflect how people actually type,
+    not only the attested spellings."""
     name, _, n = spec.partition(":")
     ws = ds.load_wordset(name)
     items = list(ws.items)
+    rng = random.Random(seed)
     if n:
-        random.Random(seed).shuffle(items)
+        rng.shuffle(items)
         items = items[: int(n)]
+    if augment:
+        from likhi.eval.stress import STYLES
+
+        extra = []
+        for it in items:
+            for style in augment:
+                variant = STYLES[style](it.roman, rng)
+                if variant and variant != it.roman:
+                    extra.append(ds.WordItem(variant, it.golds, it.weight, f"{it.source}+{style}"))
+        items = items + extra
     return ws.name, items
 
 
@@ -43,8 +57,9 @@ def cmd_cache(args: argparse.Namespace) -> int:
     engine = LikhiEngine()
     rows = []
     t0 = time.time()
+    augment = [s for s in (args.augment or "").split(",") if s]
     for spec in args.dataset:
-        name, items = _load_items(spec)
+        name, items = _load_items(spec, augment=augment)
         print(f"[tune] {name}: {len(items)} items", flush=True)
         for i, it in enumerate(items):
             feats = engine.candidates(
@@ -186,6 +201,11 @@ def main(argv: list[str] | None = None) -> int:
     c = sub.add_parser("cache")
     c.add_argument("--dataset", action="append", required=True, help="name[:sample_size]")
     c.add_argument("--model-scored", type=int, default=40)
+    c.add_argument(
+        "--augment",
+        default="",
+        help="comma-separated typing habits, e.g. drop_vowels,a_for_o,double",
+    )
     c.set_defaults(fn=cmd_cache)
     s = sub.add_parser("search")
     s.add_argument("--metric", default="top1", choices=["top1", "top3", "mrr"])
