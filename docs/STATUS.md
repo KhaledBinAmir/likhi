@@ -28,7 +28,7 @@ personalization store, bigram context table, engine server, PIME text-service sk
 | Avro rules (what Windows users have today) | 17.9 | 17.9 | 17.9 | 32.8 | 12.0 | 47.5 (grouped) |
 | IndicXlit, NumPy port, beam 5 | 57.9 | 75.7 | 79.9 | 12.5 | | |
 | IndicXlit + word-frequency rerank | 69.1 | 78.9 | 79.9 | 9.5 | | |
-| Likhi v0 (hand-set weights) | running | | | | 31.4 (first 4000 pairs; hand weights over-trust corpus frequency, see below) | **90.0** (top-3 94.4, top-5 95.1, CER 6.0) |
+| Likhi v0 (hand-set weights) | running | | | | 31.4 → 43.6 after the gap/raw-logp ranker fix (first 4000 pairs) | **89.9** (top-3 94.8, top-5 95.2, CER 5.4) |
 
 Published for reference: IndicXlit 55.4 top-1 (69.4 with rerank), Google 2020 transformer 49.4.
 
