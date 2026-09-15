@@ -190,7 +190,9 @@ def build_prefix_tables(out: Path, rom_items: list, key_items: list) -> None:
         roman, word = key.split("\t", 1)
         for n in range(1, min(SHORT_ROMAN_PREFIX, len(roman)) + 1):
             p = "r:" + roman[:n]
-            s = count * 10 + lex.get(word, 0)
+            # attestation count first, corpus frequency only to break ties: a single noisy
+            # alignment of a very frequent word must not outrank a well-attested completion
+            s = count * 10_000 + min(lex.get(word, 0), 9_999)
             if s > best[p].get(word, -1):
                 best[p][word] = s
     for key, (score,) in key_items:

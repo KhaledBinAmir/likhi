@@ -239,7 +239,9 @@ class LikhiEngine:
                 rom, word = key.split("\t", 1)
                 if rom == r:
                     continue
-                completions.append((count + self._lex_score(word), word, count))
+                completions.append(
+                    (count * 10_000 + min(self._lex_score(word), 9_999), word, count)
+                )
         completions.sort(reverse=True)
         for _s, word, count in completions[: self.max_per_channel]:
             ft = f(word)
