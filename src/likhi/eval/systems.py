@@ -37,10 +37,14 @@ class AvroSystem:
 def load_system(name: str, **kwargs) -> System:
     if name == "avro":
         return AvroSystem(**kwargs)
-    if name == "indicxlit":
+    if name in ("indicxlit", "indicxlit+rerank"):
+        from likhi.engine.xlit_np import IndicXlitNumpySystem
+
+        return IndicXlitNumpySystem(rescore=name.endswith("+rerank"), **kwargs)
+    if name in ("indicxlit-ct2", "indicxlit-ct2+rerank"):
         from likhi.engine.xlit_ct2 import IndicXlitSystem
 
-        return IndicXlitSystem(**kwargs)
+        return IndicXlitSystem(rescore=name.endswith("+rerank"), **kwargs)
     if name == "likhi":
         from likhi.engine.core import LikhiSystem
 

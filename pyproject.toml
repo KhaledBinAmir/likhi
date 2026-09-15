@@ -20,8 +20,11 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-# Neural transliteration channel (IndicXlit via CTranslate2) and compact tries.
-engine = ["ctranslate2>=4.5", "numpy>=1.26", "marisa-trie>=1.2"]
+# Neural transliteration channel (IndicXlit in pure NumPy) and compact tries.
+engine = ["numpy>=1.26", "marisa-trie>=1.2"]
+# Optional faster runtime for the same model. Not used by default: the Windows wheel crashed on
+# an i9-10900K test machine, and NumPy is fast enough for single-word decoding.
+ct2 = ["ctranslate2>=4.5"]
 # Evaluation harness, baselines and data pipeline.
 eval = [
   "regex>=2024.0",
@@ -34,7 +37,8 @@ eval = [
 [dependency-groups]
 dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.10"]
 # One-time model conversion (IndicXlit fairseq checkpoint -> CTranslate2). Never shipped to users.
-convert = ["torch>=2.2", "omegaconf>=2.3"]
+# torch is deliberately not required: scripts/fairseq_ckpt.py reads the checkpoint with numpy.
+convert = ["omegaconf>=2.3"]
 
 [project.scripts]
 likhi-eval = "likhi.eval.cli:main"
