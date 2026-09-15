@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -118,6 +119,108 @@ def cmd_fill(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_import_pairs(args: argparse.Namespace) -> int:
+    """Two-line pairs: a roman line followed by its Bangla line; blank lines separate pairs.
+    Lines starting with '#' are comments. A Bangla line may hold alternates separated by ' | '."""
+    lines = Path(args.file).read_text(encoding="utf-8").splitlines()
+    pairs: list[tuple[str, str]] = []
+    buf: list[str] = []
+    for ln in lines + [""]:
+        s = ln.strip()
+        if s.startswith("#"):
+            continue
+        if not s:
+            if len(buf) >= 2:
+                pairs.append((buf[0], buf[1]))
+            elif len(buf) == 1:
+                print(f"  skipped (no Bangla line): {buf[0][:60]}")
+            buf = []
+            continue
+        buf.append(s)
+    n = 0
+    for roman, gold in pairs:
+        golds = _parse_gold(gold)
+        if not golds or not all(has_bengali(g) for g in golds) or has_bengali(roman):
+            print(f"  skipped (roman/Bangla order?): {roman[:40]} / {gold[:40]}")
+            continue
+        _append(PERSONAL, {"roman": roman, "gold": golds, "tags": [args.tag] if args.tag else []})
+        n += 1
+    print(f"added {n} pairs to {PERSONAL}")
+    return 0
+
+
+_RE_WA_LINE = re.compile(
+    r"^‎?\[?(?P<date>\d{1,2}[./-]\d{1,2}[./-]\d{2,4}),?\s+(?P<time>\d{1,2}:\d{2}(?::\d{2})?\s?(?:[APap][Mm])?)\]?\s*[-–]?\s*(?P<name>[^:]{1,60}?):\s(?P<msg>.*)$"
+)
+
+
+def cmd_import_whatsapp(args: argparse.Namespace) -> int:
+    """Pull your own romanized-Bangla messages out of a WhatsApp 'Export chat' text file.
+
+    Keeps lines by the given sender that are Latin letters only, at least ``--min-words`` words,
+    and not obviously English (a small stop-list heuristic). Writes a template JSONL to fill gold
+    into with ``likhi-collect fill``. Nothing is sent anywhere; this is local text processing.
+    """
+    english_markers = {
+        "the",
+        "and",
+        "is",
+        "are",
+        "you",
+        "your",
+        "this",
+        "that",
+        "with",
+        "for",
+        "have",
+        "will",
+        "please",
+        "thanks",
+        "thank",
+        "ok",
+        "okay",
+        "yes",
+        "no",
+        "not",
+        "can",
+        "what",
+        "when",
+    }
+    text = Path(args.file).read_text(encoding="utf-8", errors="replace").splitlines()
+    out = Path(args.out or (Path(args.file).with_suffix(".template.jsonl")))
+    me = args.me.strip().casefold()
+    kept: list[str] = []
+    for ln in text:
+        m = _RE_WA_LINE.match(ln.strip())
+        if not m:
+            continue
+        if m.group("name").strip().casefold() != me:
+            continue
+        msg = m.group("msg").strip()
+        if "<Media omitted>" in msg or "http" in msg or "@" in msg:
+            continue
+        if has_bengali(msg) or not re.fullmatch(r"[A-Za-z0-9 ,.?!'\-]+", msg):
+            continue
+        words = [w.casefold() for w in re.findall(r"[A-Za-z']+", msg)]
+        if len(words) < args.min_words:
+            continue
+        eng = sum(1 for w in words if w in english_markers)
+        if eng / max(1, len(words)) > 0.34:
+            continue
+        kept.append(msg)
+    seen: set[str] = set()
+    uniq = [k for k in kept if not (k.casefold() in seen or seen.add(k.casefold()))]
+    if args.limit:
+        uniq = uniq[: args.limit]
+    with open(out, "w", encoding="utf-8") as f:
+        for msg in uniq:
+            f.write(
+                json.dumps({"roman": msg, "gold": [], "tags": ["chat"]}, ensure_ascii=False) + "\n"
+            )
+    print(f"kept {len(uniq)} of your messages -> {out}; next: likhi-collect fill {out}")
+    return 0
+
+
 def cmd_stats(args: argparse.Namespace) -> int:
     rows = _read(PERSONAL)
     if not rows:
@@ -172,6 +275,19 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("fill")
     p.add_argument("file")
     p.set_defaults(fn=cmd_fill)
+    p = sub.add_parser("import-pairs", help="two-line roman/Bangla pairs separated by blank lines")
+    p.add_argument("file")
+    p.add_argument("--tag", default="")
+    p.set_defaults(fn=cmd_import_pairs)
+    p = sub.add_parser(
+        "import-whatsapp", help="your own Banglish lines from a WhatsApp chat export"
+    )
+    p.add_argument("file")
+    p.add_argument("--me", required=True, help="your display name exactly as in the export")
+    p.add_argument("--out")
+    p.add_argument("--min-words", type=int, default=3)
+    p.add_argument("--limit", type=int, default=400)
+    p.set_defaults(fn=cmd_import_whatsapp)
     sub.add_parser("stats").set_defaults(fn=cmd_stats)
     sub.add_parser("validate").set_defaults(fn=cmd_validate)
     args = ap.parse_args(argv)
