@@ -1,0 +1,13 @@
+{
+	"server_host": "127.0.0.1",
+	"server_port": 47123,
+	"server_timeout_ms": 250,
+	"candidates": 5,
+	"toggle_key": "F12",
+	"bangla_digits": true,
+	"danda_for_period": true,
+	"space_commits": true,
+	"enter_commits": true,
+	"font_name": "Nirmala UI",
+	"font_size": 16
+}

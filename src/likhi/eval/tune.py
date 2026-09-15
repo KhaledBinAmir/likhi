@@ -172,6 +172,9 @@ def cmd_search(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from likhi.engine.threads import limit_blas_threads
+
+    limit_blas_threads()
     ap = argparse.ArgumentParser(
         prog="likhi-tune", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
