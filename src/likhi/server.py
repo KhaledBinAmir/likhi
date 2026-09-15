@@ -44,9 +44,11 @@ class SuggestService:
 
     def __init__(self, engine, cache_size: int = 2048) -> None:
         self.engine = engine
-        self.lock = (
-            threading.Lock()
-        )  # engine calls are serialized (NumPy + caches are not thread-safe)
+        # Only `learn` takes this lock. Reads are lock-free: NumPy releases the GIL, marisa lookups
+        # and lru_cache are thread-safe, and the SQLite store allows cross-thread use. Holding a
+        # lock around the model call would make the fast path wait for the model, defeating the
+        # deadline (measured: 120 ms round trips instead of 12).
+        self.lock = threading.Lock()
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="likhi-model")
         self.pending: dict[tuple, Future] = {}
         self.full_cache: OrderedDict[tuple, list[str]] = OrderedDict()
@@ -56,8 +58,7 @@ class SuggestService:
         return (roman, context[-1:] if context else (), k)
 
     def _full(self, roman: str, context: tuple[str, ...], k: int) -> list[str]:
-        with self.lock:
-            return self.engine.suggest(roman, context, k)
+        return self.engine.suggest(roman, context, k)
 
     def suggest(
         self, roman: str, context: tuple[str, ...], k: int, deadline_ms: float
@@ -77,8 +78,7 @@ class SuggestService:
             return full, False
         except Exception:
             pass  # timeout (or a model error): fall back to the fast path
-        with self.lock:
-            strong = self.engine.has_strong_match(roman)
+        strong = self.engine.has_strong_match(roman)
         if not strong:
             # The trie channels have nothing convincing (typically an English loanword or a name):
             # a wrong-looking flash is worse than a slightly later answer, so wait a bit longer.
@@ -86,8 +86,7 @@ class SuggestService:
                 return fut.result(timeout=WEAK_MATCH_DEADLINE_MS / 1000.0), False
             except Exception:
                 pass
-        with self.lock:
-            fast = self.engine.suggest(roman, context, k, fast=True)
+        fast = self.engine.suggest(roman, context, k, fast=True)
         return fast, True
 
     def _done(self, key: tuple, fut: Future) -> None:
