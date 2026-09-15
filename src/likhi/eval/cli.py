@@ -84,7 +84,8 @@ def eval_words(system_name: str, dataset: str, k: int, limit: int | None, errors
 
 
 _RE_HAS_LATIN = re.compile(r"[A-Za-z]")
-_RE_EDGE_PUNCT = re.compile(r"^[\W_]+|[\W_]+$")
+# Same caveat as in datasets.py: never let \W eat Bengali combining marks.
+_RE_EDGE_PUNCT = re.compile(r"^[^\wঀ-৿‌‍]+|[^\wঀ-৿‌‍]+$")
 
 
 def _transliterate_sentence(system, roman: str) -> list[str]:

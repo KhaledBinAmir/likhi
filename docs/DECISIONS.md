@@ -18,6 +18,16 @@ Short records of choices that are not obvious from the code. Newest first.
   only call the model when the lexicon is unsure, and the code is easy to optimize or distil.
   CTranslate2 remains available behind the `ct2` extra for machines where it works.
 
+## 2026-09-16: Never use `\W` on Bengali text
+
+- A punctuation stripper written as `[\W_]+$` silently removed final vowel signs, virama, nukta
+  and candrabindu from Bengali tokens, because Python's `\w` excludes combining marks. It
+  corrupted the aligned BanglaTLit word pairs (golds like কিন্ত for কিন্তু) and, through them, the
+  chat romanizations in the lexicon ("korci" → করছ). Caught by reading eval misses.
+- Rule: tokenizers and strippers treat the whole Bengali block U+0980–U+09FF plus ZWJ/ZWNJ as
+  word characters (`tests/test_datasets.py` guards this). Results computed before the fix were
+  deleted from `results/` and re-run.
+
 ## 2026-09-16: onnxruntime is out too (for now)
 
 - onnxruntime 1.30.0 crashes with an access violation at import on the same machine, in the uv
