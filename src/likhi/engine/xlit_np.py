@@ -240,7 +240,11 @@ class XlitTransformer:
         """Fused q/k/v projection (q already scaled), split into heads."""
         qkv = h @ a.wqkv + a.bqkv
         d = self.dim
-        return self._split(qkv[..., :d]), self._split(qkv[..., d : 2 * d]), self._split(qkv[..., 2 * d :])
+        return (
+            self._split(qkv[..., :d]),
+            self._split(qkv[..., d : 2 * d]),
+            self._split(qkv[..., 2 * d :]),
+        )
 
     def _attend(
         self, q: np.ndarray, k: np.ndarray, v: np.ndarray, causal: bool = False
