@@ -46,8 +46,28 @@ habit-augmented dev data followed.
 | blend B | 90.1 / 96.4 | 66.9 / 90.4 | 63.6 / 79.6 | 16/17 | 57.4 / 47.8 |
 | **blend C = B + corrected য় keys + acronym guard (deployed)** | **90.3 / 96.5** | 67.0 / 90.6 | 63.4 / 79.5 | 16/17 | 57.3 / 49.3 |
 
-Real typing data (chat words, feedback) outranks synthetic habits, so blend C ships. The open
-item: the key-heavy weights are 9 points better on dropped-vowel shorthand; a vowel-ratio gate does
+Real typing data (chat words, feedback) outranks synthetic habits, so blend C ships.
+
+### Stage 1 gate, deployed weights, full sets (2026-09-16 end of day)
+
+| Metric | Target (PLAN §3) | Result | |
+|---|---|---|---|
+| Dakshina test top-1 | ≥ 72 | 70.2 (IndicXlit alone 59.6, +rerank 69.1; Avro 17.9) | near miss |
+| Dakshina test top-5 | ≥ 92 | 91.8 | near miss |
+| Dakshina test CER | | 9.5 (IndicXlit 12.5) | best so far |
+| Chat words (BanglaTLit test) top-1, frequency-weighted | ≥ 88 (personal-set proxy) | 88.9 (Avro 47.5) | pass |
+| Chat words top-5 | ≥ 97 | 95.4 | near miss |
+| Aksharantar test top-1 / top-5, all 9,300 pairs (unseen-word proxy) | top-5 ≥ 75 | 57.7 / 77.9 | pass |
+| Khaled's reported words | | 16 / 17 first, 17 / 17 in top-5 | |
+| Engine latency, model-free fast path | p95 ≤ 15 ms | ~3–5 ms per keystroke | pass |
+| Engine latency, full path with model | p95 ≤ 15 ms | 80–130 ms per rare word (hidden from typing by the deadline design) | **fail: Stage 2 item** |
+| Personal test set | ≥ 88 / ≥ 97 | not collected yet | pending |
+
+Verdict: the approach works (every accuracy number is within 2 points of its gate or above it,
+and far above the rule-based baseline); Stage 3 shell work is justified and has in fact started
+(PIME smoke test passed). The two open gates are model latency and the personal set.
+
+The open item: the key-heavy weights are 9 points better on dropped-vowel shorthand; a vowel-ratio gate does
 not separate shorthand from English loanwords, so the next tuning round needs another signal
 (per-input-style tuning with as-is items up-weighted, or a learned gate).
 
