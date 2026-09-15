@@ -181,25 +181,26 @@ def build(
     chat = count_chat(chat_rows)
     romans = collect_romans(raw, chat_rows)
 
-    # Lexicon membership: corpus words above a small threshold, plus every word that has a human
-    # romanization (those are real words by construction).
+    # Lexicon membership (unigrams + phonetic keys): corpus words above a small threshold plus the
+    # human-romanized Dakshina words. Aksharantar's 1.1M mined words stay reachable through the
+    # romanization index only: they are mostly named entities and would swamp the key index.
     keys: set[str] = set()
     keys |= {k for k, c in wiki.counts.items() if c >= min_wiki}
     keys |= set(subs.counts)
     keys |= set(chat.counts)
-    romanized_words = {match_key(w) for (_, w) in romans}
-    keys |= romanized_words
-    log(f"lexicon size: {len(keys):,} (romanized: {len(romanized_words):,})")
+    rom_surface: dict[str, Counter[str]] = defaultdict(Counter)
+    for (_r, w), (c, src) in romans.items():
+        k = match_key(w)
+        rom_surface[k][w] += c
+        if src & (SRC_DAKSHINA | SRC_BANGLATLIT):
+            keys.add(k)
+    log(f"lexicon size: {len(keys):,} (words with romanizations: {len(rom_surface):,})")
 
     def surface(k: str) -> str:
         for sc in (chat, subs, wiki):
             if k in sc.counts:
                 return sc.best_surface(k)
-        # word only known from romanization data: pick the most attested spelling
-        best = Counter()
-        for (_, w), (c, _) in romans.items():
-            if match_key(w) == k:
-                best[w] += c
+        best = rom_surface.get(k)
         return best.most_common(1)[0][0] if best else k
 
     surfaces = {k: surface(k) for k in keys}
@@ -214,7 +215,8 @@ def build(
 
     rom_items = []
     for (r, w), (c, src) in romans.items():
-        rom_items.append((f"{r}\t{surfaces.get(match_key(w), w)}", (min(c, 2**31 - 1), src)))
+        k = match_key(w)
+        rom_items.append((f"{r}\t{surfaces.get(k, w)}", (min(c, 2**31 - 1), src)))
     romtrie = marisa_trie.RecordTrie("<Ib", rom_items)
     romtrie.save(str(out / "romans.marisa"))
 

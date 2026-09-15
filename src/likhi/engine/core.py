@@ -66,7 +66,8 @@ class LikhiEngine:
         *,
         weights: dict[str, float] | None = None,
         beam: int = 4,
-        max_per_channel: int = 40,
+        max_per_channel: int = 30,
+        model_scored: int = 16,
         use_avro: bool = True,
         use_xlit: bool = True,
     ) -> None:
@@ -89,6 +90,7 @@ class LikhiEngine:
         self.w = dict(DEFAULT_WEIGHTS, **(weights or {}))
         self.beam = beam
         self.max_per_channel = max_per_channel
+        self.model_scored = model_scored
         self.xlit = None
         if use_xlit and xlit_dir is not None:
             from likhi.engine.xlit_np import XlitTransformer
@@ -176,10 +178,12 @@ class LikhiEngine:
                 setattr(ft, pattr, True)
                 ft.sources.add(f"key-{level}+")
 
-        # 3. transliteration model
+        # 3. transliteration model (encoder shared with the scoring pass below)
+        enc_kv = None
         if self.xlit is not None:
+            enc_kv = self.xlit.encode(r)
             for rank, (word, _lp) in enumerate(
-                self.xlit.beam_search(r, beam=self.beam, nbest=self.beam), 1
+                self.xlit.beam_search(r, beam=self.beam, nbest=self.beam, enc_kv=enc_kv), 1
             ):
                 ft = f(word)
                 ft.xlit_rank = ft.xlit_rank or rank
@@ -196,10 +200,12 @@ class LikhiEngine:
                 ft.avro = True
                 ft.sources.add("avro")
 
-        # Model scores for every candidate (batched teacher forcing)
+        # Model scores for the most promising candidates only (batched teacher forcing is the
+        # expensive step; everything else is a trie lookup).
         if self.xlit is not None and feats:
-            words = list(feats)
-            lps = self.xlit.score_candidates(r, words)
+            pre = sorted(feats.items(), key=lambda kv: -self.score(kv[0], kv[1], r))
+            words = [w for w, _ in pre[: self.model_scored]]
+            lps = self.xlit.score_candidates(r, words, enc_kv=enc_kv)
             for word, lp in zip(words, lps, strict=True):
                 feats[word].xlit_logp = float(lp)
         return feats
@@ -222,6 +228,9 @@ class LikhiEngine:
         if ft.xlit_logp == ft.xlit_logp:  # not NaN
             # normalize by word length so long words are not punished
             s += w["xlit_logp"] * ft.xlit_logp / max(1, len(word))
+        else:
+            # not scored by the model: assume a mediocre fit so scored candidates can outrank it
+            s += w["xlit_logp"] * -2.0
         if ft.xlit_rank == 1:
             s += w["xlit_top1"]
         elif 1 < ft.xlit_rank <= 3:

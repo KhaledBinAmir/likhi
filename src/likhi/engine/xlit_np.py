@@ -201,6 +201,14 @@ class XlitTransformer:
             for i in range(int(cfg["decoder_layers"]))
         ]
         self.scaling = self.head_dim**-0.5
+        # Tokens the decoder must never emit: pad, bos, language tags, dictionary padding words.
+        banned = np.zeros(len(self.tgt_vocab), dtype=np.float32)
+        banned[self.pad] = -np.inf
+        banned[self.tgt_index["<s>"]] = -np.inf
+        for t, i in self.tgt_index.items():
+            if (t.startswith("__") and t.endswith("__")) or t.startswith("madeupword"):
+                banned[i] = -np.inf
+        self._banned = banned
 
     # ------------------------------------------------------------------ building blocks
 
@@ -345,15 +353,26 @@ class XlitTransformer:
             x = layer_norm(x, *self.dec_ln)
         return log_softmax(x @ self.out_proj.T)
 
-    def score_candidates(self, roman: str, words: Sequence[str], *, lang: str = "bn") -> np.ndarray:
+    def encode(self, roman: str, lang: str = "bn") -> list[tuple[np.ndarray, np.ndarray]]:
+        """Run the encoder once; the result can be shared by beam_search and score_candidates."""
+        return self._encode(self.encode_source(roman, lang))[1]
+
+    def score_candidates(
+        self,
+        roman: str,
+        words: Sequence[str],
+        *,
+        lang: str = "bn",
+        enc_kv: list[tuple[np.ndarray, np.ndarray]] | None = None,
+    ) -> np.ndarray:
         """log P(word | roman) for each word (sum over characters incl. </s>), in one batched pass.
 
         Words containing characters outside the target vocabulary get -inf.
         """
         if not words:
             return np.zeros(0, dtype=np.float32)
-        src = self.encode_source(roman, lang)
-        _, enc_kv = self._encode(src)
+        if enc_kv is None:
+            enc_kv = self.encode(roman, lang)
         ids: list[list[int]] = []
         ok = np.ones(len(words), dtype=bool)
         for i, w in enumerate(words):
@@ -399,21 +418,17 @@ class XlitTransformer:
         nbest: int | None = None,
         max_len: int | None = None,
         lenpen: float = 1.0,
+        enc_kv: list[tuple[np.ndarray, np.ndarray]] | None = None,
     ) -> list[tuple[str, float]]:
         """Return [(word, normalized_log_prob)] best first. Scores are fairseq-style: sum / len**lenpen."""
         nbest = nbest or beam
         if not roman:
             return []
-        src = self.encode_source(roman, lang)
         max_len = max_len or min(60, 3 * len(roman) + 5)
-        _, enc_kv = self._encode(src)
+        if enc_kv is None:
+            enc_kv = self.encode(roman, lang)
 
-        banned = np.zeros(len(self.tgt_vocab), dtype=np.float32)
-        banned[self.pad] = -np.inf
-        banned[self.tgt_index["<s>"]] = -np.inf
-        for t, i in self.tgt_index.items():
-            if t.startswith("__") and t.endswith("__") or t.startswith("madeupword"):
-                banned[i] = -np.inf
+        banned = self._banned
 
         # live hypotheses
         tokens = np.full((1,), self.eos, dtype=np.int64)  # decoder starts from </s>
