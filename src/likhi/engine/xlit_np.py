@@ -470,13 +470,17 @@ class XlitTransformer:
             new_scores: list[float] = []
             new_seqs: list[list[int]] = []
             new_src: list[int] = []
-            for idx in top:
+            for j, idx in enumerate(top):
                 b, t = divmod(int(idx), vsize)
                 sc = float(flat[idx])
                 if not np.isfinite(sc):
                     continue
                 if t == self.eos:
-                    finished.append((sc / ((step + 1) ** lenpen), seqs[b]))
+                    # fairseq only finalizes an EOS that ranks within the top `beam` candidates;
+                    # lower-ranked EOS entries are dropped, otherwise weak short words fill the
+                    # finished list and end the search before longer correct words complete.
+                    if j < beam:
+                        finished.append((sc / ((step + 1) ** lenpen), seqs[b]))
                     continue
                 if len(new_tokens) < beam:
                     new_tokens.append(t)
@@ -485,11 +489,9 @@ class XlitTransformer:
                     new_src.append(b)
             if len(finished) >= beam or not new_tokens:
                 break
-            # Early stop: best possible normalized live score cannot beat worst kept finished score.
-            if len(finished) >= nbest:
-                best_live = max(new_scores) / ((step + 2) ** lenpen)
-                if best_live < sorted(f[0] for f in finished)[-nbest]:
-                    break
+            # No other early stop: a live hypothesis' length-normalized score can still improve as
+            # it grows, so comparing it against finished ones is not a valid bound (it dropped the
+            # model's own best answer, খাচ্ছে for "khacche", at beam 4).
             sel = np.asarray(new_src)
             tokens = np.asarray(new_tokens, dtype=np.int64)
             scores = np.asarray(new_scores, dtype=np.float32)

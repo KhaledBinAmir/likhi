@@ -18,6 +18,16 @@ Short records of choices that are not obvious from the code. Newest first.
   only call the model when the lexicon is unsure, and the code is easy to optimize or distil.
   CTranslate2 remains available behind the `ct2` extra for machines where it works.
 
+## 2026-09-16: Beam search finalization follows fairseq exactly
+
+- Khaled's word "khacche" exposed a beam-search bug: the model's own best hypothesis খাচ্ছে was
+  missing at beam 4 (present at beam 5). Cause: any end-of-word candidate among the top 2×beam
+  was finalized, so weak short words filled the finished list and stopped the search before the
+  longer correct word completed. fairseq finalizes only EOS candidates ranked within the top
+  `beam`. Fixed in `xlit_np.beam_search`; a speculative early-stop shortcut was removed as well.
+- Lesson: keep a few real typing reports as a committed regression set (`data/feedback/words.jsonl`,
+  eval set `feedback-words`); one word found a bug that thousands of benchmark items hid.
+
 ## 2026-09-16: Never use `\W` on Bengali text
 
 - A punctuation stripper written as `[\W_]+$` silently removed final vowel signs, virama, nukta

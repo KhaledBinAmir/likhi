@@ -61,7 +61,7 @@ DEFAULT_WEIGHTS = {
     "xlit_top3": 0.7,
     "avro": 0.8,
     "oov": -3.0,
-    "personal_sel": 3.5,
+    "personal_sel": 5.0,
     "personal_word": 0.6,
     "bigram": 0.7,  # weight on log P(word | previous word) relative to the unigram estimate
     "latin_base": -6.0,  # stands in for the unigram term of a raw-Latin candidate
