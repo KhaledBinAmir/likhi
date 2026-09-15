@@ -85,9 +85,12 @@ def _score(word: str, ft: dict, uni: float, w: dict[str, float]) -> float:
         s += w["key_prefix"]
     xl = ft["xlit_logp"]
     if xl == xl:
-        s += w["xlit_logp"] * xl / max(1, len(word))
+        s += w["xlit_logp"] * max(-40.0, xl)
     else:
-        s += w["xlit_logp"] * -2.0
+        s += w["xlit_logp"] * -15.0
+    gap = ft.get("gap", 0)
+    if gap and not ft["rom_exact"]:
+        s += w["gap"] * gap
     if ft["xlit_rank"] == 1:
         s += w["xlit_top1"]
     elif 1 < ft["xlit_rank"] <= 3:
@@ -125,7 +128,8 @@ GRID = {
     "key_fine": [0.0, 0.6, 1.2, 2.0, 3.0],
     "key_coarse": [0.0, 0.3, 0.6, 1.2, 2.0],
     "key_prefix": [-3.0, -2.0, -1.0, 0.0],
-    "xlit_logp": [0.2, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0],
+    "gap": [-1.5, -1.0, -0.6, -0.4, -0.2, 0.0],
+    "xlit_logp": [0.1, 0.2, 0.35, 0.5, 0.75, 1.0, 1.5],
     "xlit_top1": [0.0, 1.0, 1.5, 2.5, 4.0],
     "xlit_top3": [0.0, 0.5, 1.0, 2.0],
     "avro": [0.0, 0.5, 1.0, 2.0],

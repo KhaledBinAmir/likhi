@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
-from likhi.engine.romankey import key_from_roman
+from likhi.engine.romankey import key_from_bangla, key_from_roman
 from likhi.engine.textnorm import canonical, normalize_roman, to_output
 
 REPO = Path(__file__).resolve().parents[3]
@@ -34,6 +34,7 @@ class Feats:
     key_coarse: bool = False
     key_fine_prefix: bool = False
     key_coarse_prefix: bool = False
+    gap: int = 0  # for completions: how many extra letters/key units beyond what was typed
     xlit_rank: int = 0  # 1..n if produced by the beam, else 0
     xlit_logp: float = float("nan")  # log P(word | roman) from the model (teacher forced)
     avro: bool = False
@@ -54,7 +55,8 @@ DEFAULT_WEIGHTS = {
     "key_fine": 1.2,
     "key_coarse": 0.6,
     "key_prefix": -1.0,
-    "xlit_logp": 0.35,
+    "gap": -0.4,  # per extra unit a completion adds beyond the typed input
+    "xlit_logp": 0.5,  # on the raw log P(word | roman); candidates share the same roman, so no length norm
     "xlit_top1": 1.5,
     "xlit_top3": 0.7,
     "avro": 0.8,
@@ -233,20 +235,26 @@ class LikhiEngine:
             # short input: precomputed top completions instead of scanning thousands of entries
             for key, (score,) in self.prefixes.items(f"r:{r}\t"):
                 word = key.split("\t", 1)[1]
-                completions.append((score, word, 1))
+                completions.append((score, word, 1, 2))
         else:
             for key, (count, _src) in self.romans.items(r):
                 rom, word = key.split("\t", 1)
                 if rom == r:
                     continue
                 completions.append(
-                    (count * 10_000 + min(self._lex_score(word), 9_999), word, count)
+                    (
+                        count * 10_000 + min(self._lex_score(word), 9_999),
+                        word,
+                        count,
+                        len(rom) - len(r),
+                    )
                 )
         completions.sort(reverse=True)
-        for _s, word, count in completions[: self.max_per_channel]:
+        for _s, word, count, gap in completions[: self.max_per_channel]:
             ft = f(word)
             if not ft.rom_exact:
                 ft.rom_prefix += count
+                ft.gap = gap if not ft.gap else min(ft.gap, gap)
             ft.sources.add("rom+")
 
         # 2. phonetic keys
@@ -278,6 +286,9 @@ class LikhiEngine:
             for _s, word in longer[: self.max_per_channel // 2]:
                 ft = f(word)
                 setattr(ft, pattr, True)
+                if not ft.rom_exact and not getattr(ft, attr):
+                    g = max(1, len(key_from_bangla(word, level)) - len(k))
+                    ft.gap = g if not ft.gap else min(ft.gap, g)
                 ft.sources.add(f"key-{level}+")
 
         # 3. transliteration model (encoder shared with the scoring pass below)
@@ -368,11 +379,12 @@ class LikhiEngine:
         elif ft.key_fine_prefix or ft.key_coarse_prefix:
             s += w["key_prefix"]
         if ft.xlit_logp == ft.xlit_logp:  # not NaN
-            # normalize by word length so long words are not punished
-            s += w["xlit_logp"] * ft.xlit_logp / max(1, len(word))
+            s += w["xlit_logp"] * max(-40.0, ft.xlit_logp)
         else:
-            # not scored by the model: assume a mediocre fit so scored candidates can outrank it
-            s += w["xlit_logp"] * -2.0
+            # not scored by the model: assume a poor fit so scored candidates can outrank it
+            s += w["xlit_logp"] * -15.0
+        if ft.gap and not ft.rom_exact:
+            s += w["gap"] * ft.gap
         if ft.xlit_rank == 1:
             s += w["xlit_top1"]
         elif 1 < ft.xlit_rank <= 3:
