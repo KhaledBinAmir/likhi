@@ -34,8 +34,8 @@ AKSHARANTAR_BEN_URL = "https://huggingface.co/datasets/ai4bharat/Aksharantar/res
 # BanglaTLit (EMNLP 2024 Findings), MIT. Note the odd capitalisation of the test file upstream.
 BANGLATLIT_BASE = "https://raw.githubusercontent.com/farhanishmam/BanglaTLit/main/data/"
 BANGLATLIT_FILES = {
-    "BanglaTLit_train.csv": "train.csv",
-    "BanglaTLit_val.csv": "val.csv",
+    "BanglaTLit_train.csv": "train.csv",  # 245,727 rows: the PT corpus, ~42.9k of them annotated
+    "BanglaTLiT_val.csv": "val.csv",
     "BanglaTLiT_test.csv": "test.csv",
     "BanglaTLit-PT.txt": "pt.txt",
 }
