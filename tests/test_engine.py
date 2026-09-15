@@ -25,7 +25,11 @@ def engine():
         ("amr", "আমার"),
         ("aamar", "আমার"),
         ("korchi", "করছি"),
-        pytest.param("korci", "করছি", marks=pytest.mark.xfail(reason="ranker weights not tuned yet", strict=False)),
+        pytest.param(
+            "korci",
+            "করছি",
+            marks=pytest.mark.xfail(reason="ranker weights not tuned yet", strict=False),
+        ),
         ("tumi", "তুমি"),
     ],
 )

@@ -87,7 +87,13 @@ class LikhiEngine:
         self._uni_total = float(total) + 1.0
         self._floor = math.log(0.5 / self._uni_total)
 
-        self.w = dict(DEFAULT_WEIGHTS, **(weights or {}))
+        self.w = dict(DEFAULT_WEIGHTS)
+        tuned = lexicon_dir / "weights.json"
+        if tuned.exists():  # written by likhi-tune
+            import json
+
+            self.w.update(json.loads(tuned.read_text(encoding="utf-8")))
+        self.w.update(weights or {})
         self.beam = beam
         self.max_per_channel = max_per_channel
         self.model_scored = model_scored
@@ -122,7 +128,15 @@ class LikhiEngine:
         a, b, c = rec[0]
         return a + 3 * b + 20 * c
 
-    def candidates(self, roman: str) -> dict[str, Feats]:
+    def candidates(
+        self, roman: str, *, model_scored: int | None = None, static_prescore: bool = False
+    ) -> dict[str, Feats]:
+        """Gather candidates from all channels and attach features.
+
+        ``model_scored`` overrides how many pre-ranked candidates get a model score;
+        ``static_prescore`` pre-ranks with a weight-independent heuristic (used when tuning weights,
+        so cached features do not depend on the weights being tuned).
+        """
         r = normalize_roman(roman)
         feats: dict[str, Feats] = {}
 
@@ -203,12 +217,29 @@ class LikhiEngine:
         # Model scores for the most promising candidates only (batched teacher forcing is the
         # expensive step; everything else is a trie lookup).
         if self.xlit is not None and feats:
-            pre = sorted(feats.items(), key=lambda kv: -self.score(kv[0], kv[1], r))
-            words = [w for w, _ in pre[: self.model_scored]]
+            n = self.model_scored if model_scored is None else model_scored
+            if static_prescore:
+                pre = sorted(feats.items(), key=lambda kv: -self._static_prescore(kv[0], kv[1]))
+            else:
+                pre = sorted(feats.items(), key=lambda kv: -self.score(kv[0], kv[1], r))
+            words = [w for w, _ in pre[:n]]
             lps = self.xlit.score_candidates(r, words, enc_kv=enc_kv)
             for word, lp in zip(words, lps, strict=True):
                 feats[word].xlit_logp = float(lp)
         return feats
+
+    def _static_prescore(self, word: str, ft: Feats) -> float:
+        """Weight-independent ranking used to pick which candidates deserve a model score."""
+        s = self.unigram_logp(word)
+        s += 3.0 * bool(ft.rom_exact) + 0.5 * math.log1p(ft.rom_exact)
+        s += 1.5 * ft.key_fine + 0.8 * ft.key_coarse
+        s += 2.5 * bool(ft.xlit_rank) + 1.0 * ft.avro
+        s -= (
+            1.0
+            * (ft.key_fine_prefix or ft.key_coarse_prefix or bool(ft.rom_prefix))
+            * (not ft.rom_exact)
+        )
+        return s
 
     # ------------------------------------------------------------------ ranking
 

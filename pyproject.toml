@@ -44,6 +44,7 @@ convert = ["omegaconf>=2.3"]
 likhi-eval = "likhi.eval.cli:main"
 likhi-data = "likhi.data.cli:main"
 likhi-collect = "likhi.eval.collect:main"
+likhi-tune = "likhi.eval.tune:main"
 
 [project.urls]
 Homepage = "https://github.com/KhaledBinAmir/likhi"
