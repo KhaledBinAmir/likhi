@@ -96,7 +96,8 @@ class SuggestService:
                 return fut.result(timeout=max(0.0, deadline_ms) / 1000.0), False
             except Exception:
                 pass  # timeout (or a model error / abort): fall back to the fast path
-            if not self.engine.has_strong_match(roman):
+            fast, strong = self.engine.fast_suggest(roman, context, k)
+            if not strong:
                 # The trie channels have nothing convincing (typically an English loanword or a
                 # name): a wrong-looking flash is worse than a slightly later answer, so wait.
                 try:
@@ -105,7 +106,7 @@ class SuggestService:
                     pass
         finally:
             self.waiting.discard(key)
-        return self.engine.suggest(roman, context, k, fast=True), True
+        return fast, True
 
     def _done(self, key: tuple, fut: Future) -> None:
         self.pending.pop(key, None)
