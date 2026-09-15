@@ -27,7 +27,9 @@ HALF_LIFE_DAYS = 90.0
 
 
 class PersonalStore:
-    def __init__(self, path: Path | str | None = None, *, half_life_days: float = HALF_LIFE_DAYS) -> None:
+    def __init__(
+        self, path: Path | str | None = None, *, half_life_days: float = HALF_LIFE_DAYS
+    ) -> None:
         self.path = Path(path) if path is not None else DEFAULT_DB
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(str(self.path), check_same_thread=False)
@@ -35,7 +37,9 @@ class PersonalStore:
         self.db.execute(
             "CREATE TABLE IF NOT EXISTS selections (roman TEXT, word TEXT, count REAL, last REAL, PRIMARY KEY (roman, word))"
         )
-        self.db.execute("CREATE TABLE IF NOT EXISTS words (word TEXT PRIMARY KEY, count REAL, last REAL)")
+        self.db.execute(
+            "CREATE TABLE IF NOT EXISTS words (word TEXT PRIMARY KEY, count REAL, last REAL)"
+        )
         self.db.commit()
         self.decay = math.log(2) / (half_life_days * 86400.0)
         # small in-memory caches, invalidated on learn()
@@ -44,27 +48,36 @@ class PersonalStore:
 
     # ------------------------------------------------------------------ writes
 
-    def learn(self, roman: str, chosen: str, context: tuple[str, ...] = (), *, when: float | None = None) -> None:
+    def learn(
+        self, roman: str, chosen: str, context: tuple[str, ...] = (), *, when: float | None = None
+    ) -> None:
         r = normalize_roman(roman)
         w = chosen if chosen == roman else canonical(chosen)
         if not r or not w:
             return
         now = when if when is not None else time.time()
-        cur = self.db.execute("SELECT count, last FROM selections WHERE roman=? AND word=?", (r, w)).fetchone()
+        cur = self.db.execute(
+            "SELECT count, last FROM selections WHERE roman=? AND word=?", (r, w)
+        ).fetchone()
         count = self._decayed(cur[0], cur[1], now) + 1.0 if cur else 1.0
         self.db.execute(
-            "INSERT OR REPLACE INTO selections (roman, word, count, last) VALUES (?,?,?,?)", (r, w, count, now)
+            "INSERT OR REPLACE INTO selections (roman, word, count, last) VALUES (?,?,?,?)",
+            (r, w, count, now),
         )
         cur = self.db.execute("SELECT count, last FROM words WHERE word=?", (w,)).fetchone()
         wcount = self._decayed(cur[0], cur[1], now) + 1.0 if cur else 1.0
-        self.db.execute("INSERT OR REPLACE INTO words (word, count, last) VALUES (?,?,?)", (w, wcount, now))
+        self.db.execute(
+            "INSERT OR REPLACE INTO words (word, count, last) VALUES (?,?,?)", (w, wcount, now)
+        )
         self.db.commit()
         self._sel_cache.pop(r, None)
         self._word_cache.pop(w, None)
 
     def forget(self, roman: str | None = None, word: str | None = None) -> None:
         if roman is not None and word is not None:
-            self.db.execute("DELETE FROM selections WHERE roman=? AND word=?", (normalize_roman(roman), word))
+            self.db.execute(
+                "DELETE FROM selections WHERE roman=? AND word=?", (normalize_roman(roman), word)
+            )
         elif word is not None:
             self.db.execute("DELETE FROM selections WHERE word=?", (word,))
             self.db.execute("DELETE FROM words WHERE word=?", (word,))
@@ -86,7 +99,9 @@ class PersonalStore:
         if r in self._sel_cache:
             return self._sel_cache[r]
         now = now if now is not None else time.time()
-        rows = self.db.execute("SELECT word, count, last FROM selections WHERE roman=?", (r,)).fetchall()
+        rows = self.db.execute(
+            "SELECT word, count, last FROM selections WHERE roman=?", (r,)
+        ).fetchall()
         out = {w: self._decayed(c, last, now) for w, c, last in rows}
         self._sel_cache[r] = out
         return out
@@ -108,8 +123,16 @@ class PersonalStore:
 
         n = 0
         with open(path, "w", encoding="utf-8") as f:
-            for roman, word, count, last in self.db.execute("SELECT roman, word, count, last FROM selections"):
-                f.write(json.dumps({"roman": roman, "word": word, "count": count, "last": last}, ensure_ascii=False) + "\n")
+            for roman, word, count, last in self.db.execute(
+                "SELECT roman, word, count, last FROM selections"
+            ):
+                f.write(
+                    json.dumps(
+                        {"roman": roman, "word": word, "count": count, "last": last},
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
                 n += 1
         return n
 
