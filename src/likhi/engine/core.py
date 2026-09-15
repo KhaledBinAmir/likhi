@@ -191,13 +191,20 @@ class LikhiEngine:
         return math.log(0.4)
 
     def candidates(
-        self, roman: str, *, model_scored: int | None = None, static_prescore: bool = False
+        self,
+        roman: str,
+        *,
+        model_scored: int | None = None,
+        static_prescore: bool = False,
+        use_model: bool = True,
     ) -> dict[str, Feats]:
         """Gather candidates from all channels and attach features.
 
         ``model_scored`` overrides how many pre-ranked candidates get a model score;
         ``static_prescore`` pre-ranks with a weight-independent heuristic (used when tuning weights,
-        so cached features do not depend on the weights being tuned).
+        so cached features do not depend on the weights being tuned);
+        ``use_model=False`` is the fast path (tries + rules only, a few milliseconds) used while a
+        key is being typed; the full path fills in behind it.
         """
         r = normalize_roman(roman)
         feats: dict[str, Feats] = {}
@@ -256,7 +263,7 @@ class LikhiEngine:
 
         # 3. transliteration model (encoder shared with the scoring pass below)
         enc_kv = None
-        if self.xlit is not None:
+        if self.xlit is not None and use_model:
             enc_kv = self.xlit.encode(r)
             for rank, (word, _lp) in enumerate(
                 self.xlit.beam_search(r, beam=self.beam, nbest=self.beam, enc_kv=enc_kv), 1
@@ -293,7 +300,7 @@ class LikhiEngine:
 
         # Model scores for the most promising candidates only (batched teacher forcing is the
         # expensive step; everything else is a trie lookup).
-        if self.xlit is not None and feats:
+        if self.xlit is not None and use_model and feats:
             n = self.model_scored if model_scored is None else model_scored
             if static_prescore:
                 pre = sorted(feats.items(), key=lambda kv: -self._static_prescore(kv[0], kv[1]))
@@ -361,16 +368,21 @@ class LikhiEngine:
             s += w["personal_word"] * math.log1p(ft.personal_word)
         return s
 
-    def _suggest(self, roman: str, k: int, context: tuple[str, ...] = ()) -> tuple[str, ...]:
-        feats = self.candidates(roman)
+    def _suggest(
+        self, roman: str, k: int, context: tuple[str, ...] = (), use_model: bool = True
+    ) -> tuple[str, ...]:
+        feats = self.candidates(roman, use_model=use_model)
         if not feats:
             return ()
         ranked = sorted(feats.items(), key=lambda kv: -self.score(kv[0], kv[1], roman, context))
         return tuple(to_output(word) for word, _ in ranked[:k])
 
-    def suggest(self, roman: str, context: Sequence[str] = (), k: int = 5) -> list[str]:
+    def suggest(
+        self, roman: str, context: Sequence[str] = (), k: int = 5, *, fast: bool = False
+    ) -> list[str]:
+        """Ranked candidates. ``fast=True`` skips the transliteration model (see candidates())."""
         prev = (canonical(context[-1]),) if context else ()
-        return list(self._suggest_cached(normalize_roman(roman), k, prev))
+        return list(self._suggest_cached(normalize_roman(roman), k, prev, not fast))
 
     def explain(self, roman: str, k: int = 8) -> list[tuple[str, float, Feats]]:
         feats = self.candidates(roman)
