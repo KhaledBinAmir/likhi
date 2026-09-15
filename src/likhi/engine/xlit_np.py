@@ -86,6 +86,8 @@ class _Attn:
     bo: np.ndarray
     ln_g: np.ndarray
     ln_b: np.ndarray
+    wqkv: np.ndarray | None = None  # fused [q|k|v] projection, q part pre-scaled
+    bqkv: np.ndarray | None = None
 
 
 @dataclass
@@ -158,18 +160,31 @@ class XlitTransformer:
         self.enc_ln = (f.get("encoder.layer_norm.weight"), f.get("encoder.layer_norm.bias"))
         self.dec_ln = (f.get("decoder.layer_norm.weight"), f.get("decoder.layer_norm.bias"))
 
+        scaling = (self.dim // self.heads) ** -0.5
+
         def attn(p: str, ln: str) -> _Attn:
+            wq = f[f"{p}.q_proj.weight"].T.copy()
+            bq = f[f"{p}.q_proj.bias"]
+            wk = f[f"{p}.k_proj.weight"].T.copy()
+            bk = f[f"{p}.k_proj.bias"]
+            wv = f[f"{p}.v_proj.weight"].T.copy()
+            bv = f[f"{p}.v_proj.bias"]
+            # One fused matmul for q, k, v; the scaling folded into the q columns.
+            wqkv = np.ascontiguousarray(np.concatenate([wq * scaling, wk, wv], axis=1))
+            bqkv = np.concatenate([bq * scaling, bk, bv])
             return _Attn(
-                f[f"{p}.q_proj.weight"].T.copy(),
-                f[f"{p}.q_proj.bias"],
-                f[f"{p}.k_proj.weight"].T.copy(),
-                f[f"{p}.k_proj.bias"],
-                f[f"{p}.v_proj.weight"].T.copy(),
-                f[f"{p}.v_proj.bias"],
+                wq,
+                bq,
+                wk,
+                bk,
+                wv,
+                bv,
                 f[f"{p}.out_proj.weight"].T.copy(),
                 f[f"{p}.out_proj.bias"],
                 f[f"{ln}.weight"],
                 f[f"{ln}.bias"],
+                wqkv,
+                bqkv,
             )
 
         def ffn(p: str) -> _FFN:
@@ -221,6 +236,12 @@ class XlitTransformer:
         *lead, _h, t, _d = x.shape
         return x.swapaxes(-3, -2).reshape(*lead, t, self.dim)
 
+    def _qkv(self, h: np.ndarray, a: _Attn) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Fused q/k/v projection (q already scaled), split into heads."""
+        qkv = h @ a.wqkv + a.bqkv
+        d = self.dim
+        return self._split(qkv[..., :d]), self._split(qkv[..., d : 2 * d]), self._split(qkv[..., 2 * d :])
+
     def _attend(
         self, q: np.ndarray, k: np.ndarray, v: np.ndarray, causal: bool = False
     ) -> np.ndarray:
@@ -245,9 +266,7 @@ class XlitTransformer:
         for L in self.enc_layers:
             a = L.attn
             h = layer_norm(x, a.ln_g, a.ln_b) if self.pre_norm else x
-            q = self._split((h @ a.wq + a.bq) * self.scaling)
-            k = self._split(h @ a.wk + a.bk)
-            v = self._split(h @ a.wv + a.bv)
+            q, k, v = self._qkv(h, a)
             h = self._merge(self._attend(q, k, v)) @ a.wo + a.bo
             x = x + h
             if not self.pre_norm:
@@ -283,9 +302,7 @@ class XlitTransformer:
         for i, L in enumerate(self.dec_layers):
             a = L.self_attn
             h = layer_norm(x, a.ln_g, a.ln_b) if self.pre_norm else x
-            q = self._split((h @ a.wq + a.bq) * self.scaling)
-            k = self._split(h @ a.wk + a.bk)
-            v = self._split(h @ a.wv + a.bv)
+            q, k, v = self._qkv(h, a)
             if cache[i] is None:
                 cache[i] = [k, v]
             else:
@@ -328,9 +345,7 @@ class XlitTransformer:
         for i, L in enumerate(self.dec_layers):
             a = L.self_attn
             h = layer_norm(x, a.ln_g, a.ln_b) if self.pre_norm else x
-            q = self._split((h @ a.wq + a.bq) * self.scaling)
-            k = self._split(h @ a.wk + a.bk)
-            v = self._split(h @ a.wv + a.bv)
+            q, k, v = self._qkv(h, a)
             h = self._merge(self._attend(q, k, v, causal=True)) @ a.wo + a.bo
             x = x + h
             if not self.pre_norm:
