@@ -18,7 +18,7 @@ from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
-from likhi.engine.textnorm import has_bengali, normalize_roman
+from likhi.engine.textnorm import has_bengali, match_key, normalize_roman
 from likhi.eval import datasets as ds
 from likhi.eval.metrics import WordEval, percentile, wer
 from likhi.eval.systems import load_system
@@ -143,6 +143,73 @@ def eval_sentences(system_name: str, dataset: str, limit: int | None, errors: in
     return result
 
 
+def eval_replay(system_name: str, dataset: str, k: int, limit: int | None) -> dict:
+    """Keystroke replay: type each word letter by letter and record when the gold first appears.
+
+    Reports the share of keystrokes a typist could skip by committing as soon as the right word
+    is top-1 (or within top-k), plus per-keystroke latency percentiles: the numbers that decide
+    whether the keyboard *feels* like Gboard.
+    """
+    system = load_system(system_name)
+    wordset = ds.load_wordset(dataset)
+    items = wordset.items[:limit] if limit else wordset.items
+    lat: list[float] = []
+    saved_top1 = saved_topk = 0.0
+    total_keys = 0
+    never_top1 = never_topk = 0
+    for it in items:
+        roman = it.roman
+        n = len(roman)
+        if n == 0:
+            continue
+        total_keys += n
+        first1 = firstk = None
+        for i in range(1, n + 1):
+            s = time.perf_counter()
+            cands = system.suggest(roman[:i], k=k)
+            lat.append((time.perf_counter() - s) * 1000)
+            rank = None
+            gold_keys = {match_key(g) for g in it.golds}
+            for j, c in enumerate(cands, 1):
+                if match_key(c) in gold_keys:
+                    rank = j
+                    break
+            if rank == 1 and first1 is None:
+                first1 = i
+            if rank is not None and rank <= k and firstk is None:
+                firstk = i
+            if first1 is not None and firstk is not None:
+                break
+        if first1 is None:
+            never_top1 += 1
+        else:
+            saved_top1 += n - first1
+        if firstk is None:
+            never_topk += 1
+        else:
+            saved_topk += n - firstk
+    return {
+        "kind": "replay",
+        "system": system_name,
+        "dataset": wordset.name,
+        "k": k,
+        "n": len(items),
+        "keystrokes": total_keys,
+        "saved_top1_pct": 100.0 * saved_top1 / max(1, total_keys),
+        f"saved_top{k}_pct": 100.0 * saved_topk / max(1, total_keys),
+        "never_top1_pct": 100.0 * never_top1 / max(1, len(items)),
+        f"never_top{k}_pct": 100.0 * never_topk / max(1, len(items)),
+        "latency_ms": {
+            "p50": percentile(lat, 50),
+            "p95": percentile(lat, 95),
+            "p99": percentile(lat, 99),
+            "mean": sum(lat) / len(lat) if lat else 0.0,
+        },
+        "git": _git_rev(),
+        "when": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+
+
 def report() -> None:
     rows = []
     for p in sorted(RESULTS.glob("*.json")):
@@ -166,7 +233,21 @@ def report() -> None:
 def _print_result(r: dict) -> None:
     keys = [
         k
-        for k in ("n", "top1", "top3", "top5", "mrr", "cer", "wer", "wer_bengali_tokens")
+        for k in (
+            "n",
+            "top1",
+            "top3",
+            "top5",
+            "mrr",
+            "cer",
+            "wer",
+            "wer_bengali_tokens",
+            "keystrokes",
+            "saved_top1_pct",
+            "saved_top5_pct",
+            "never_top1_pct",
+            "never_top5_pct",
+        )
         if k in r
     ]
     parts = [f"{k}={r[k]:.2f}" if isinstance(r[k], float) else f"{k}={r[k]}" for k in keys]
@@ -204,6 +285,13 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--errors", type=int, default=25)
     s.add_argument("--no-save", action="store_true")
 
+    rp = sub.add_parser("replay", help="keystroke-by-keystroke replay: savings and per-key latency")
+    rp.add_argument("--system", required=True)
+    rp.add_argument("--dataset", action="append", required=True)
+    rp.add_argument("--k", type=int, default=5)
+    rp.add_argument("--limit", type=int)
+    rp.add_argument("--no-save", action="store_true")
+
     sub.add_parser("report", help="table of all saved results")
 
     args = ap.parse_args(argv)
@@ -213,6 +301,8 @@ def main(argv: list[str] | None = None) -> int:
     for dataset in args.dataset:
         if args.cmd == "words":
             r = eval_words(args.system, dataset, args.k, args.limit, args.errors)
+        elif args.cmd == "replay":
+            r = eval_replay(args.system, dataset, args.k, args.limit)
         else:
             r = eval_sentences(args.system, dataset, args.limit, args.errors)
         _print_result(r)
