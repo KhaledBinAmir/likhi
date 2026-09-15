@@ -1,0 +1,39 @@
+{
+ "kind": "sentences",
+ "system": "avro",
+ "dataset": "dakshina-test",
+ "n": 5000,
+ "wer": 61.467190426466445,
+ "wer_bengali_tokens": 61.465470048605695,
+ "ref_tokens": 60333,
+ "elapsed_s": 28.587853399993037,
+ "git": "unknown",
+ "when": "2026-09-15T19:33:39+00:00",
+ "sample_misses": [
+  {
+   "roman": "Eti desher itihase karkhanay sobcheye maratmok ognikander ghotona.",
+   "gold": "এটি দেশের ইতিহাসে কারখানায় সবচেয়ে মারাত্মক অগ্নিকাণ্ডের ঘটনা।",
+   "hyp": "এতি দেশের ইতিহাসে কারখানায় সবছেয়ে মারাত্মক অগ্নিকান্দের ঘতনা"
+  },
+  {
+   "roman": "1987 sal-e Team International Understanding-e Rammon Magsaisai purskar labh koren.",
+   "gold": "১৯৮৭ সালে টিম ইন্টারন্যাশনাল আন্ডারস্ট্যান্ডিং-এ রামোন ম্যাগসেসে পুরস্কার লাভ করেন।",
+   "hyp": "1987 সেল তেয়াম ইন্তেরনাতিওনাল উন্দেরস্তান্দিঙ্গে রাম্মন মাগসাইসাই পুরস্কার লাভ করেন"
+  },
+  {
+   "roman": "Tar ma take bhishonbhabe uddipona jugiyechen.",
+   "gold": "তার মা তাকে ভীষণভাবে উদ্দীপনা যুগিয়েছেন।",
+   "hyp": "তার মা তাকে ভিশনভাবে উদ্দিপনা জুগিয়েছেন"
+  },
+  {
+   "roman": "Udahoron sworup, Mahatma Gandhi-r ohingso andolon ba kaloder odhikar aday-er andolon.",
+   "gold": "উদাহরণ স্বরূপ, মহত্মা গান্ধীর অহিংস আন্দোলন বা কালোদের অধীকার আদায়ের আন্দোলন।",
+   "hyp": "উদাহরন স্বরুপ মাহাত্মা গান্ধির অহিংস আন্দলন বা কালদের অধিকার আদায়ের আন্দলন"
+  },
+  {
+   "roman": "Ata gach brikkho jatiyo udbhid.",
+   "gold": "আতা গাছ বৃক্ষ জাতীয় উদ্ভিদ।",
+   "hyp": "আতা গাছ ব্রিক্ষ জাতিয় উদ্ভিদ"
+  }
+ ]
+}
