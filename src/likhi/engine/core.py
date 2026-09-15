@@ -413,7 +413,9 @@ class LikhiEngine:
         exact phonetic-key match for a lexicon word). When False, the quick model-free answer is
         probably poor and callers should wait for the model."""
         feats = self.candidates(roman, use_model=False)
-        return any(ft.rom_exact or (ft.key_fine and ft.in_lexicon) for ft in feats.values())
+        # Phonetic-key matches alone are not enough: "khacche" key-matches কিছু/কাছে, which would
+        # be shown while the model's খাচ্ছে is still computing. Attested spellings are reliable.
+        return any(ft.rom_exact >= 2 for ft in feats.values())
 
     def suggest(
         self, roman: str, context: Sequence[str] = (), k: int = 5, *, fast: bool = False
