@@ -35,7 +35,10 @@ from likhi import __version__
 
 DEFAULT_PORT = 47123
 DEFAULT_DEADLINE_MS = 12.0
-WEAK_MATCH_DEADLINE_MS = 100.0  # extra wait when the model-free answer has no strong evidence
+# Extra wait when the model-free answer has no strong evidence. The NumPy model currently needs
+# 80-130 ms per word on an i9 (beam + scoring), so this is what it takes to show the right answer
+# on the first display of a rare word; common words never wait. Stage 2 latency work shrinks it.
+WEAK_MATCH_DEADLINE_MS = 160.0
 COMMIT_DEADLINE_MS = 400.0
 
 
