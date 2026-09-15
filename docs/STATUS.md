@@ -60,6 +60,16 @@ digits fine, Space/Enter behave as intended. Reported misses are in `data/feedba
   input method for each app window" in Settings → Time & language → Typing → Advanced keyboard
   settings.
 
+## Backlog: community data (post v0.1, opt-in only)
+
+Collect only struggle events, never accepted first suggestions: (a) user picked candidate 2..5
+(record roman, chosen word, and the word we ranked first); (b) user backspaced and retyped the
+same word with another spelling (record abandoned spelling, final spelling, chosen word); (c) raw
+Latin committed and later typed in Bangla. Word level only; drop anything with digits/symbols,
+secure fields, context, timestamps, identifiers. Local name filter (lexicon + model confidence),
+review-before-send, one-click delete, and a minimum-installs threshold on the server. First step
+is a manual `likhi-collect export` people can post consciously.
+
 ## Next
 
 1. Read the Likhi v0 numbers, tune weights on the dev caches, re-measure (Stage 1 gate).
