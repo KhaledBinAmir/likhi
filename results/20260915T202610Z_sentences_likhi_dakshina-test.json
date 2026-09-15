@@ -1,0 +1,164 @@
+{
+ "kind": "sentences",
+ "system": "likhi",
+ "dataset": "dakshina-test",
+ "n": 1500,
+ "wer": 14.426626990687167,
+ "wer_bengali_tokens": 14.386584289496911,
+ "ref_tokens": 18147,
+ "elapsed_s": 2980.39431850001,
+ "git": "unknown",
+ "when": "2026-09-15T20:26:10+00:00",
+ "sample_misses": [
+  {
+   "roman": "1987 sal-e Team International Understanding-e Rammon Magsaisai purskar labh koren.",
+   "gold": "১৯৮৭ সালে টিম ইন্টারন্যাশনাল আন্ডারস্ট্যান্ডিং-এ রামোন ম্যাগসেসে পুরস্কার লাভ করেন।",
+   "hyp": "1987 সালে টিম ইন্টারন্যাশনাল আন্ডারস্ট্যান্ডিং রোমান ম্যাগসেসে পুরস্কার লাভ করেন"
+  },
+  {
+   "roman": "Udahoron sworup, Mahatma Gandhi-r ohingso andolon ba kaloder odhikar aday-er andolon.",
+   "gold": "উদাহরণ স্বরূপ, মহত্মা গান্ধীর অহিংস আন্দোলন বা কালোদের অধীকার আদায়ের আন্দোলন।",
+   "hyp": "উদাহরণ স্বরূপ মহাত্মা গান্ধীর অহিংস আন্দোলন বা কালোদের অধিকার আদায়ের আন্দোলন"
+  },
+  {
+   "roman": "Ata gach brikkho jatiyo udbhid.",
+   "gold": "আতা গাছ বৃক্ষ জাতীয় উদ্ভিদ।",
+   "hyp": "এটা গাছ বৃক্ষ জাতীয় উদ্ভিদ"
+  },
+  {
+   "roman": "Gan antorjatik bimanbondor bortomane Addu International Airport Private Limited kortrik porichalito hoy.",
+   "gold": "গান আন্তর্জাতিক বিমানবন্দর বর্তমানে আদ্দু ইন্টারন্যাশনাল এয়ারপোর্ট প্রাইভেট লিমিটেড কর্তৃক পরিচালিত হয়।",
+   "hyp": "গান আন্তর্জাতিক বিমানবন্দর বর্তমানে আইডি ইন্টারন্যাশনাল এয়ারপোর্ট প্রাইভেট লিমিটেড কর্তৃক পরিচালিত হয়"
+  },
+  {
+   "roman": "Agami doshlokkho bochor por eti ekti lal otidanob taray porinoto hobe ebong otinobotara hisebe bisforito hobe.",
+   "gold": "আগামী দশলক্ষ বছর পর এটি একটি লাল অতিদানব তারায় পরিনত হবে এবং অতিনবতারা হিসেবে বিস্ফোরিত হবে।",
+   "hyp": "আগামী দশলক্ষ বছর পর এটি একটি লাল অতিদানব তারায় পরিণত হবে এবং অতিনবতারা হিসেবে বিস্ফোরিত হবে"
+  },
+  {
+   "roman": "(Ekhane Hasan Bosri-r icche chilo Rabeya tar asonkhani dube jaowa hote rokkha korte pare kina.)",
+   "gold": "(এখানে হাসান বসরীর ইচ্ছে ছিল রাবেয়া তাঁর আসনখানি ডুবে যাওয়া হতে রক্ষা করতে পারে কিনা)।",
+   "hyp": "এখানে হাসান বসরীর ইচ্ছে ছিল রাবেয়া তার আসনখানি ডুবে যাওয়া হতে রক্ষা করতে পারে কিনা"
+  },
+  {
+   "roman": "Protyeke nijederke somorpon korbe othocho byaktigotobhabe karo kache noto hobe na.",
+   "gold": "প্রত্যেকে নিজেদেরকে সমর্পণ করবে অথচ ব্যক্তিগতভাবে কারো কাছে নত হবে না।",
+   "hyp": "প্রত্যেকে নিজেদেরকে সমর্পণ করবে অথচ ব্যক্তিগতভাবে করে কাছে নিতে হবে না"
+  },
+  {
+   "roman": "Tini baro bachor boyos theke Chou nach shikhte arombho koren",
+   "gold": "তিনি বারো বছর বয়স থেকে ছৌ নাচ শিখতে আরম্ভ করেন ।",
+   "hyp": "তিনি বার বছর বয়স থেকে চাই নাচ শিখতে আরম্ভ করেন"
+  },
+  {
+   "roman": "Bay Capital ebong onnyannora (jemon-Damani Group ebong Junjhunwala Group) biniyog-er madhyome Sterling Holiday Resort er 47.42 shotangsho share-er onshidar.",
+   "gold": "বে ক্যাপিটাল এবং অন্যান্যরা(যেমন-দামানি গ্রুপ এবং ঝুনঝুনওয়ালা গ্রুপ) বিনিয়োগের মাধ্যমে বর্তমানে স্টার্লিং হলিডে রিসর্ট এর ৪৭.৪২ শতাংশ শেয়ারের অংশীদার ।",
+   "hyp": "ভাই ক্যাপিটাল এবং অন্যান্যরা যেমন্দামণি গ্রুপ এবং জুনঝুনভালা গ্রুপ বিনিয়োগের মাধ্যমে স্টার্লিং হলিডেস রিসোর্ট এর 47.42 শতাংশ শেয়ার অংশীদার"
+  },
+  {
+   "roman": "Anamorphic widescreen video format-e 2013 sal-er March-e ingreji subtitle soho cholocchitrer DVD muti deowa hoy.",
+   "gold": "অ্যানামর্ফিক ওয়াইডস্ক্রিণ ডিভিডি ফরম্যাটে ২০১৩ সালের মার্চে ইংরেজি সাবটাইটেল সহ চলচ্চিত্রের ডিভিডি মুক্তি দেয়া হয়।",
+   "hyp": "অ্যানামর্ফিক ওয়াইডস্ক্রিণ ভিডিও ফরমেট 2013 সালের মার্চে ইংরেজি সাবটাইটেল সহ চলচ্চিত্রের ডিভিডি মুক্তি দেওয়া হয়"
+  },
+  {
+   "roman": "Boda upojelay 3ti nodi royeche. Nodigulo hocche Korotoya nodi, Tangon nodi ebong Pathraj nodi.",
+   "gold": "বোদা উপজেলায় ৩টি নদী রয়েছে। নদীগুলো হচ্ছে করতোয়া নদী,টাঙ্গন নদী এবং পাথরাজ নদী।",
+   "hyp": "বোদা উপজেলায় ১টি নদী রয়েছে নদীগুলো হচ্ছে করতে নদী তিনি নদী এবং পাথরাজ নদী"
+  },
+  {
+   "roman": "Sergei Brin Google er shoho-protishthata.",
+   "gold": "সের্গেই ব্রিন, গুগল এর সহ-প্রতিষ্ঠাতা",
+   "hyp": "সের্গেই ব্রিন গুগল এর সহপ্রতিষ্ঠাতা"
+  },
+  {
+   "roman": "D. hamida Begum - lekhok o shohokari odhyapok, Southeast University, Dhaka.",
+   "gold": "ড. হামিদা বেগম –– লেখক ও সহকারী অধ্যাপক, সাউথইস্ট ইউনিভার্সিটি, ঢাকা।",
+   "hyp": "ডি হামিদা বেগম লেখক ও সহকারী অধ্যাপক সাউথইস্ট ইউনিভার্সিটি ঢাকা"
+  },
+  {
+   "roman": "Tai giter songe pray sobai gola melate paare.",
+   "gold": "তাই গীতের সঙ্গে প্রায় সবাই গলা মেলাতে পারে।",
+   "hyp": "তাই গোত্রের সঙ্গে প্রায় সবাই গুলা মেলাতে পারে"
+  },
+  {
+   "roman": "Bondor uttor-dokkhin obhyontor ebong upokuliyo Shipping Route er crossforce hoy, obhyontor chin gurutwopurno Eengineer jolopoth jao khal soho uttor, Yangte nodi, uttor.",
+   "gold": "বন্দর উত্তর-দক্ষিণ অভ্যন্তর এবং উপকূলীয় শিপিং রুট এর ক্রসফোর্স হয়, অভ্যন্তর চীন গুরুত্বপূর্ণ ইন্জিনিয়ার জলপথ যাও খাল সহ উত্তর, ইয়াংতে নদী, উত্তর।",
+   "hyp": "বন্দর উত্তরদক্ষিণ অভ্যন্তরে এবং উপকূলীয় শিপিং রুট এর ক্রসফোর্স হয় অভ্যন্তরে চীন গুরুত্বপূর্ণ ইউনিয়নের জলপথ যাও খাল সহ উত্তর নিতে নদী উত্তর"
+  },
+  {
+   "roman": "Piu nam-er upojatira 1m shotoke Burma elakate dokkhin diker Iraboti upotyoka diye probesh kore.",
+   "gold": "পিউ নামের উপজাতিরা ১ম শতকে বার্মা এলাকাতে দক্ষিণ দিকের ইরাবতী উপত্যকা দিয়ে প্রবেশ করে।",
+   "hyp": "পিউ নামের উপজাতিরা মি শতকে বার্মা এলাকাতে দক্ষিণ দিকের ইরাবতী উপত্যকা দিয়ে প্রবেশ করে"
+  },
+  {
+   "roman": "Tinii prothom digital boi-er proyojoniyota upolobdhi koren ebong bishwer copyright mukto boigulo digitalisation shuru koren.",
+   "gold": "তিনিই প্রথম ডিজিটাল বইয়ের প্রয়োজনীয়তা উপলব্ধি করেন এবং বিশ্বের কপিরাইট মুক্ত বইগুলো ডিজিটালাইজেশন শুরু করেন।",
+   "hyp": "তিনি প্রথম ডিজিটাল বইয়ের প্রয়োজনীয়তা উপলব্ধি করেন এবং বিশ্বের কপিরাইট মুক্ত বইগুলো ডিজিটালাইজেশন শুরু করেন"
+  },
+  {
+   "roman": "1945 sal-e dirghosthayi bohudoliyo byabostha shuru hoy.",
+   "gold": "১৯৪৫ সালে দীর্ঘস্থায়ী বহুদলীয় ব্যবস্থা শুরু হয়।",
+   "hyp": "1945 সালে দীর্ঘস্থায়ী বহুদলীয় ব্যবস্থা শুরু হয়"
+  },
+  {
+   "roman": "Hazaribag jelar Sultanpur gram utponno hoyen Bokaro jelar Damodor nod-e potito hoyeche.",
+   "gold": "হাজারিবাগ জেলার সুলতানপুর গ্রাম উৎপন্ন হয়ে বোকারো জেলায় দামোদর নদে পতিত হয়েছে।",
+   "hyp": "হাজারীবাগ জেলার সুলতানপুর গ্রাম উৎপন্ন হন বোকারো জেলার দামোদর নদে পতিত হয়েছে"
+  },
+  {
+   "roman": "Jhu Chuanjong o Li Keyong modhye bidroher karone poroborti Liang rajbongsher Shatuo Turkeyder sathe birup somporko chilo.",
+   "gold": "ঝু ছুয়ানজং ও লি কেয়ং মধ্যে বিদ্রোহের কারণে পরবর্তী লিয়াং রাজবংশের শাতুও তুর্কিদের সাথে বিরূপ সম্পর্ক ছিল।",
+   "hyp": "যায় চেঞ্জিং ও লি কেকিয়াং মধ্যে বিদ্রোহের কারণে পরবর্তী লিয়াং রাজবংশের সাথে তুর্কীদের সাথে বিরূপ সম্পর্ক ছিল"
+  },
+  {
+   "roman": "Studies from an Eastern Home (1913) holo bhogini Nibedita-r ekti atmojibonimulok boi.",
+   "gold": "স্টাডিজ ফ্রম অ্যান ইস্টার্ন হোম (১৯১৩) হল ভগিনী নিবেদিতার একটি আত্মজীবনীমূলক বই।",
+   "hyp": "স্টাডিজ ফ্রম অ্যান ইস্টার্ন হোম 1913 হল ভগিনী নিবেদিতার একটি আত্মজীবনীমূলক বই"
+  },
+  {
+   "roman": "1894 sal-e Nottinghamshire-er pokkhe besh koyekti khelay ongsho niyechilen tini.",
+   "gold": "১৮৯৪ সালে নটিংহ্যামশায়ারের পক্ষে বেশ কয়েকটি খেলায় অংশ নিয়েছিলেন তিনি।",
+   "hyp": "1894 সালে নটিংহ্যামশায়ারের পক্ষে বেশ কয়েকটি খেলায় অংশ নিয়েছিলেন তিনি"
+  },
+  {
+   "roman": "2001 sal-e bank-ti Canada bhittik Nova Skoshia bank er Bangladesh shakhatir day sompodsoho sokol porisompod kroy koreche.",
+   "gold": "২০০১ সালে ব্যাংকটি কানাডা ভিত্তিক নোভা স্কোশিয়া ব্যাংক এর বাংলাদেশ শাখাটির দায় সম্পদসহ সকল পরিসম্পদ ক্রয় করেছে।",
+   "hyp": "2001 সালে ব্যাংকটি কানাডা ভিত্তিক নোভা স্কোশিয়া ব্যাংক এর বাংলাদেশ শাখাটির দায় সম্পদসহ সকল পরিসম্পদ ক্রয় করেছে"
+  },
+  {
+   "roman": "Purbo bhumodhyosagoriyo Africa, Purbo Africa-r Purbo Baizentaine onchole chotokhato somproday ebong modhyo prachye jekhane eti hraser karone hras pacche.",
+   "gold": "পূর্ব ভূমধ্যসাগরীয় আফ্রিকা, পূর্ব আফ্রিকার পূর্ব বাইজ্যান্টাইন অঞ্চলে ছোটখাট সম্প্রদায় এবং মধ্য প্রাচ্যে যেখানে এটি হ্রাসের কারণে হ্রাস পাচ্ছে।",
+   "hyp": "পূর্ব ভূমধ্যসাগরীয় আফ্রিকা পূর্ব আফ্রিকার পূর্ব বাইজেন্টাইন অঞ্চলে ছোটখাটো সম্প্রদায় এবং মধ্য প্রাচ্যে যেখানে এটি হ্রাসের কারণে হ্রাস পাচ্ছে"
+  },
+  {
+   "roman": "North Dacota o Lowa prodesher madar msajid er por uttor America-y protishthito tritiyo masjid.",
+   "gold": "নর্থ ডাকোটা ও Iowa প্রদেশের মাদার মসজিদ এর পর উত্তর আমেরিকায় প্রতিষ্ঠিত তৃতীয় মসজিদ।",
+   "hyp": "নর্থ ডাকোটা ও লেখক প্রদেশের মাদার মসজিদ এর পর উত্তর আমেরিকায় প্রতিষ্ঠিত তৃতীয় মসজিদ"
+  },
+  {
+   "roman": "Soviet dokholdaritwer somoy nirmito Foyzabad bimanbondorti bishwer onyanyo bimanbondor theke kichuta oswabhabik hesebe bibechona kora hoy.",
+   "gold": "সোভিয়েত দখলদারিত্বের সময় নির্মিত ফয়জাবাদ বিমানবন্দরটি বিশ্বের অন্যান্য বিমানবন্দর থেকে কিছুটা অস্বাভাবিক হিসেবে বিবেচনা করা হয়।",
+   "hyp": "সোভিয়েত দখলদারিত্বের সময় নির্মিত ফৈয়জাবাদ বিমানবন্দরটি বিশ্বের অন্যান্য বিমানবন্দর থেকে কিছুটা অস্বাভাবিক হিসেবে বিবেচনা করা হয়"
+  },
+  {
+   "roman": "3 February Gregoriyo borshoponji onusare bochorer 34tomo din.",
+   "gold": "৩ ফেব্রুয়ারি গ্রেগরীয় বর্ষপঞ্জী অনুসারে বছরের ৩৪তম দিন।",
+   "hyp": "3 ফেব্রুয়ারি গ্রেগরীয় বর্ষপঞ্জী অনুসারে বছরের তুমি দিন"
+  },
+  {
+   "roman": "2015 sal-e sorbosommotikrome Canada-r sangsod Brad Butt-o Parliament-e \"Motion M-587\" ain pash koranor madhyome 24she April-ke Canada-y Armenio gonohotya smarok dibos hisebe palon korar prostab pash kore.",
+   "gold": "২০১৫ সালে সর্বসম্মতিক্রমে কানাডার সাংসদ ব্র্যাড বাটও পার্লেমেন্টে \"মোশন এম-৫৮৭\" আইন পাশ করানোর মাধ্যমে ২৪শে এপ্রিলকে কানাডায় আর্মেনীয় গণহত্যা স্মারক দিবস হিসেবে পালন করার প্রস্তাব পাশ করে।",
+   "hyp": "2015 সালে সর্বসম্মতিক্রমে কানাডার সাংসদ ব্র্যাড বাট পার্লামেন্টে মোশন মা আইন পাশ করানোর মাধ্যমে শেষ এপ্রিলকে চন্দ্র আর্মেনীয় গণহত্যা স্মারক দিবস হিসেবে পালন করার প্রস্তাব পাশ করে"
+  },
+  {
+   "roman": "Tar porichalito prothom cholocchitro Cabin in the Sky (1943)-e moncer probhab drishyoman chilo.",
+   "gold": "তার পরিচালিত প্রথম চলচ্চিত্র কেবিন ইন দ্য স্কাই (১৯৪৩)-এ মঞ্চের প্রভাব দৃশ্যমান ছিল।",
+   "hyp": "তার পরিচালিত প্রথম চলচ্চিত্র কেবিন ইন দ্য স্কাই এই মঞ্চের প্রভাব দৃশ্যমান ছিল"
+  },
+  {
+   "roman": "2009 sal-e Momota Bondyopadhyay dwitiyobar railmontri hon.",
+   "gold": "২০০৯ সালে মমতা বন্দ্যোপাধ্যায় দ্বিতীয়বার রেলমন্ত্রী হন।",
+   "hyp": "2009 সালে মমতা বন্দ্যোপাধ্যায় দ্বিতীয়বার রেলমন্ত্রী হন"
+  }
+ ]
+}

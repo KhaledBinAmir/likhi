@@ -42,6 +42,22 @@ BanglaTLit test (fixed tokenizer). Likhi v0 with bigram context: being computed.
 Latency (this i9-10900K, single thread): IndicXlit beam 4 ≈ 45 ms/word; Likhi v0 ≈ 100 ms/word
 (16 model-scored candidates). Stage 2 target is p95 ≤ 15 ms.
 
+## Feedback from the first typing session (2026-09-16)
+
+Instant, English loanwords excellent (পার্টিসিপেশন, ইন্টারন্যাশনাল, হিউমিডিটি, স্ক্রিনসেভার), Bangla
+digits fine, Space/Enter behave as intended. Reported misses are in `data/feedback/words.jsonl`
+(eval set `feedback-words`). Backlog created from the session:
+
+- Ranking: "koria/korea" gave করে first (phonetic-key + frequency beat the model's কোরিয়া); the
+  weight tuner and personal learning both address this.
+- Candidate window: PIME's built-in Win32 window; a modern picker and correct composition text
+  colour in dark-mode apps need our own renderer or libIME2 changes (Stage 3 polish).
+- Next-word prediction when the buffer is empty (we already have bigram tables) — Stage 3.
+- Windows resets the input method per app window by default; set Likhi as the default input
+  method (done via `Set-WinDefaultInputMethodOverride`) or turn off "Let me set a different
+  input method for each app window" in Settings → Time & language → Typing → Advanced keyboard
+  settings.
+
 ## Next
 
 1. Read the Likhi v0 numbers, tune weights on the dev caches, re-measure (Stage 1 gate).
