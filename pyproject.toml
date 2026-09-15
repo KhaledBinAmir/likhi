@@ -1,0 +1,68 @@
+[project]
+name = "likhi"
+version = "0.0.1"
+description = "Likhi: a Gboard-style, learning Bangla phonetic input method for Windows. Type loose romanized Bangla, get the right word first."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Khaled Bin Amir" }]
+requires-python = ">=3.12"
+keywords = ["bangla", "bengali", "banglish", "transliteration", "ime", "input-method", "keyboard", "windows", "tsf"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Natural Language :: Bengali",
+  "Operating System :: Microsoft :: Windows",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Text Processing :: Linguistic",
+]
+# The core engine is pure Python. Optional extras pull in heavier pieces.
+dependencies = []
+
+[project.optional-dependencies]
+# Neural transliteration channel (IndicXlit via CTranslate2) and compact tries.
+engine = ["ctranslate2>=4.5", "numpy>=1.26", "marisa-trie>=1.2"]
+# Evaluation harness, baselines and data pipeline.
+eval = [
+  "regex>=2024.0",
+  "rich>=13.0",
+  "huggingface_hub>=0.24",
+  "avro.py>=2024.0",
+  "prompt_toolkit>=3.0",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.10"]
+
+[project.scripts]
+likhi-eval = "likhi.eval.cli:main"
+likhi-data = "likhi.data.cli:main"
+likhi-collect = "likhi.eval.collect:main"
+
+[project.urls]
+Homepage = "https://github.com/KhaledBinAmir/likhi"
+Issues = "https://github.com/KhaledBinAmir/likhi/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/likhi"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "W"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
