@@ -59,12 +59,22 @@ DEFAULT_WEIGHTS = {
     "xlit_top3": 0.7,
     "avro": 0.8,
     "oov": -3.0,
-    "personal_sel": 3.0,
+    "personal_sel": 3.5,
     "personal_word": 0.6,
     "bigram": 0.7,  # weight on log P(word | previous word) relative to the unigram estimate
-    "latin_base": -10.0,  # stands in for the unigram term of a raw-Latin candidate
-    "latin": -4.0,
+    "latin_base": -6.0,  # stands in for the unigram term of a raw-Latin candidate
+    "latin": 0.0,
 }
+
+
+def personal_bonus(w: dict[str, float], count: float, share: float) -> float:
+    """Evidence from the user's own picks for this exact roman string.
+
+    Grows with the log of the pick count, scaled by how consistently this word was the choice.
+    Calibrated so one pick never flips a strongly established word, two picks flip a close call,
+    and about four consistent picks flip anything.
+    """
+    return w["personal_sel"] * math.log1p(count) * (0.5 + share)
 
 
 class LikhiEngine:
@@ -315,9 +325,9 @@ class LikhiEngine:
         if ft.is_latin:
             # Raw Latin is only a candidate once the user has chosen it before; it competes on
             # personal evidence, not on Bangla corpus frequency.
-            s = w["latin_base"] + w["latin"]
-            s += w["personal_sel"] * (math.log1p(ft.personal_sel) + 3.0 * ft.personal_share)
-            return s
+            return (
+                w["latin_base"] + w["latin"] + personal_bonus(w, ft.personal_sel, ft.personal_share)
+            )
         s = w["unigram"] * self.unigram_logp(word)
         if context:
             s += w["bigram"] * self.context_adjust(word, context)
@@ -346,7 +356,7 @@ class LikhiEngine:
         if not ft.in_lexicon:
             s += w["oov"]
         if ft.personal_sel:
-            s += w["personal_sel"] * (math.log1p(ft.personal_sel) + 3.0 * ft.personal_share)
+            s += personal_bonus(w, ft.personal_sel, ft.personal_share)
         if ft.personal_word:
             s += w["personal_word"] * math.log1p(ft.personal_word)
         return s
