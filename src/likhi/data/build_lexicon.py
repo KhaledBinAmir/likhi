@@ -166,6 +166,48 @@ def collect_romans(raw: Path, chat_rows: list[dict]) -> dict[tuple[str, str], li
     return rom
 
 
+SHORT_ROMAN_PREFIX = 3  # completions are precomputed for typed prefixes up to this length
+SHORT_KEY_PREFIX = 2
+PREFIX_TOP = 24
+
+
+def build_prefix_tables(out: Path, rom_items: list, key_items: list) -> None:
+    """Top completions for very short inputs.
+
+    A one- or two-letter prefix matches tens of thousands of trie entries; scanning them at every
+    keystroke is what made "ki" take 180 ms. So for short roman prefixes and short phonetic-key
+    prefixes the best PREFIX_TOP words are picked once here and looked up in O(1) at runtime.
+    Keys: "r:<prefix>\\t<word>" (romanizations, scored by attestation + lexicon score) and
+    "k:<level>:<keyprefix>\\t<word>" (phonetic keys, scored by lexicon score).
+    """
+    import marisa_trie
+
+    lex: dict[str, int] = {}
+    for key, (score,) in key_items:
+        lex[key.split("\t", 1)[1]] = score
+    best: dict[str, dict[str, int]] = defaultdict(dict)
+    for key, (count, _src) in rom_items:
+        roman, word = key.split("\t", 1)
+        for n in range(1, min(SHORT_ROMAN_PREFIX, len(roman)) + 1):
+            p = "r:" + roman[:n]
+            s = count * 10 + lex.get(word, 0)
+            if s > best[p].get(word, -1):
+                best[p][word] = s
+    for key, (score,) in key_items:
+        kk, word = key.split("\t", 1)
+        level, pk = kk.split(":", 1)
+        for n in range(1, min(SHORT_KEY_PREFIX, len(pk)) + 1):
+            p = f"k:{level}:{pk[:n]}"
+            if score > best[p].get(word, -1):
+                best[p][word] = score
+    items = []
+    for p, words in best.items():
+        for w, s in sorted(words.items(), key=lambda kv: -kv[1])[:PREFIX_TOP]:
+            items.append((f"{p}\t{w}", (min(int(s), 2**31 - 1),)))
+    marisa_trie.RecordTrie("<I", items).save(str(out / "prefixes.marisa"))
+    log(f"prefix tables: {len(best):,} short prefixes, {len(items):,} entries")
+
+
 def build(
     out: Path, *, raw: Path | None = None, wiki_lines: int | None = None, min_wiki: int = 2
 ) -> dict:
@@ -230,6 +272,8 @@ def build(
                 key_items.append((f"{level[0]}:{pk}\t{w}", (min(score, 2**31 - 1),)))
     keytrie = marisa_trie.RecordTrie("<I", key_items)
     keytrie.save(str(out / "keys.marisa"))
+
+    build_prefix_tables(out, rom_items, key_items)
 
     meta = {
         "built": time.strftime("%Y-%m-%dT%H:%M:%S"),

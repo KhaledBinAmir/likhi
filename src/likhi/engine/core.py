@@ -103,6 +103,10 @@ class LikhiEngine:
         self.romans.load(str(lexicon_dir / "romans.marisa"))
         self.keys = marisa_trie.RecordTrie("<I")
         self.keys.load(str(lexicon_dir / "keys.marisa"))
+        self.prefixes = None
+        if (lexicon_dir / "prefixes.marisa").exists():
+            self.prefixes = marisa_trie.RecordTrie("<I")
+            self.prefixes.load(str(lexicon_dir / "prefixes.marisa"))
         self.bigrams = None
         self.bigram_totals = None
         if (lexicon_dir / "bigrams.marisa").exists():
@@ -225,15 +229,22 @@ class LikhiEngine:
             ft.rom_exact += count
             ft.sources.add("rom")
         completions = []
-        for key, (count, _src) in self.romans.items(r):
-            rom, word = key.split("\t", 1)
-            if rom == r:
-                continue
-            completions.append((count + self._lex_score(word), word, count))
+        if self.prefixes is not None and len(r) <= 3:
+            # short input: precomputed top completions instead of scanning thousands of entries
+            for key, (score,) in self.prefixes.items(f"r:{r}\t"):
+                word = key.split("\t", 1)[1]
+                completions.append((score, word, 1))
+        else:
+            for key, (count, _src) in self.romans.items(r):
+                rom, word = key.split("\t", 1)
+                if rom == r:
+                    continue
+                completions.append((count + self._lex_score(word), word, count))
         completions.sort(reverse=True)
         for _s, word, count in completions[: self.max_per_channel]:
             ft = f(word)
-            ft.rom_prefix += count
+            if not ft.rom_exact:
+                ft.rom_prefix += count
             ft.sources.add("rom+")
 
         # 2. phonetic keys
@@ -247,9 +258,15 @@ class LikhiEngine:
             prefix = f"{level[0]}:{k}"
             exact = []
             longer = []
-            for key, (score,) in self.keys.items(prefix):
-                kk, word = key.split("\t", 1)
-                (exact if kk == prefix else longer).append((score, word))
+            if self.prefixes is not None and len(k) <= 2:
+                for key, (score,) in self.keys.items(prefix + "\t"):
+                    exact.append((score, key.split("\t", 1)[1]))
+                for key, (score,) in self.prefixes.items(f"k:{level[0]}:{k}\t"):
+                    longer.append((score, key.split("\t", 1)[1]))
+            else:
+                for key, (score,) in self.keys.items(prefix):
+                    kk, word = key.split("\t", 1)
+                    (exact if kk == prefix else longer).append((score, word))
             exact.sort(reverse=True)
             longer.sort(reverse=True)
             for _s, word in exact[: self.max_per_channel]:
