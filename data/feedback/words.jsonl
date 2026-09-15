@@ -10,3 +10,5 @@
 {"roman": "screensaver", "gold": ["স্ক্রিনসেভার"], "tags": ["feedback", "english"], "note": "worked"}
 {"roman": "audit", "gold": ["অডিট"], "tags": ["feedback", "english"], "note": "2026-09-16 second session"}
 {"roman": "khacche", "gold": ["খাচ্ছে"], "tags": ["feedback"], "note": "2026-09-16 second session"}
+{"roman": "khaicho", "gold": ["খাইছো"], "tags": ["feedback", "dialect"]}
+{"roman": "khaiteche", "gold": ["খাইতেছে"], "tags": ["feedback", "dialect"], "note": "model gives খেটেছি; lexicon lacks dialect verb forms"}

@@ -35,7 +35,7 @@ from likhi import __version__
 
 DEFAULT_PORT = 47123
 DEFAULT_DEADLINE_MS = 12.0
-WEAK_MATCH_DEADLINE_MS = 60.0  # extra wait when the model-free answer has no strong evidence
+WEAK_MATCH_DEADLINE_MS = 100.0  # extra wait when the model-free answer has no strong evidence
 COMMIT_DEADLINE_MS = 400.0
 
 
