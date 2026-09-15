@@ -1,0 +1,164 @@
+{
+ "kind": "sentences",
+ "system": "likhi",
+ "dataset": "banglatlit-test",
+ "n": 2500,
+ "wer": 28.196140364392743,
+ "wer_bengali_tokens": 28.068137824235386,
+ "ref_tokens": 25961,
+ "elapsed_s": 3619.143171299991,
+ "git": "unknown",
+ "when": "2026-09-15T20:36:46+00:00",
+ "sample_misses": [
+  {
+   "roman": "Tnx bro ato sundor akta gift dewar jonno",
+   "gold": "থ্যাংক্স ব্রো এত সুন্দর একটা গিফট দেওয়ার জন্য",
+   "hyp": "থ্যাংকস ব্রো এটা সুন্দর একটা গিফট দেওয়ার জন্য"
+  },
+  {
+   "roman": "kintu vai easy net to chole na. web tunnel. othoba. http injector diye ki easy net chara config file kaj kore na? tar upor to akhn droid vpn o config support korce…. parle apnar fb id link ta diyen…",
+   "gold": "কিন্তু ভাই ইসি নেট তো চলে না। ওয়েব টানেল। অথবা। এইচটিটিপি ইনজ্যাক্টর দিয়ে কি ইসি নেট ছাড়া কনফিগ ফাইল কাজ করে না? তার উপর তো এখন ড্রোইড ভিপিএন ও কনফিগ সাপোর্ট করসে…. পারলে আপনার এফবি আইডি লিংক টা দিয়েন…",
+   "hyp": "কিন্তু ভাই ইজি নেট তো চলে না ওয়েব টানেল অথবা এইচটিটিপি ইনজেক্টর দিয়ে কি ইজি নেট ছাড়া কনফিগ ফাইল কাজ করে না তার উপর তো এখন ড্রয়েড ভিপিএন ও কনফিগ সাপোর্ট করছে পারলে আপনার এফবি আইডি লিংক টা দিয়েন"
+  },
+  {
+   "roman": "100% korbe vai",
+   "gold": "১০০% করবে ভাই",
+   "hyp": "100 করবে ভাই"
+  },
+  {
+   "roman": "vai, coinbase/trust wallet er eth address dile hobe??",
+   "gold": "ভাই , কয়েনবেস /ট্রাস্ট ওয়ালেট এর এথ এড্রেস দিলে হবে ??",
+   "hyp": "ভাই কোইনবেসেট্রাস্ট ওয়ালেট এর এত এড্রেস দিলে হবে"
+  },
+  {
+   "roman": "vai eto sadhu valo টাইটেল",
+   "gold": "ভাই এতো সাধু ভালো টাইটেল",
+   "hyp": "ভাই এটা সাধু ভালো টাইটেল"
+  },
+  {
+   "roman": "wclm bro. asole play store a update er pore app er size kom besi hoyei thake",
+   "gold": "ওয়েলকাম ব্রো . আসলে প্লে স্টোর এ আপডেট এর পরে এপ এর সাইজ কম বেশি হয়েই থাকে",
+   "hyp": "আছিলাম ব্রো আসলে প্লে স্টোর এ আপডেট এর পরে অ্যাপ এর সাইজ কম বেশি হয়ে থাকে"
+  },
+  {
+   "roman": "Bro upore number key thaka khub joruri…type korte sohoj hoy arrow key cepe cepe onno page a jawa lage na",
+   "gold": "ব্রো উপরে নাম্বার কি থাকা খুব জরুরি …টাইপ করতে সহজ হয় অ্যারো কি চেপে চেপে অন্য পেজ এ যাওয়া লাগে না",
+   "hyp": "ব্রো উপরে নাম্বার কি থাকা খুব জরুরিটাইপ করতে সহজ হয় আর কি চেপে চেপে অন্য পেজ এ যাওয়া লাগে না"
+  },
+  {
+   "roman": "vaia ami apnre req disi tamzid ahmed tanim ei name..apnr tay msg dewa jay na",
+   "gold": "ভাইয়া আমি আপনারে রিক দিসি ইউসার এই নেম..আপনার টায় মেসেজ দেওয়া যায় না",
+   "hyp": "ভাইয়া আমি আপনার রেক দিসি তমিজউদ্দিন আহমেদ তানিম এই নামেআপনার তাই মেসেজ দেয়া যায় না"
+  },
+  {
+   "roman": "Many many thanks bro Ami aitai khujtesilam Mb na thaker karone download korte parlam na akhon? Pore download korbo",
+   "gold": "মেনি মেনি থ্যাংকস ব্রো আমি এইটাই খুজতেসিলাম এমবি না থাকার কারণে ডাউনলোড করতে পারলাম না এখন? পরে ডাউনলোড করবো",
+   "hyp": "মেনি মেনি থ্যাংকস ব্রো আমি এটাই খুঁজতেসিলাম এমবি না থাকার কারণে ডাউনলোড করতে পারলাম না এখন পরে ডাউনলোড করবো"
+  },
+  {
+   "roman": "tnx bro ✌?",
+   "gold": "থ্যাংক্স ব্রো ✌?",
+   "hyp": "থ্যাংকস ব্রো"
+  },
+  {
+   "roman": "Amar 9k subscribe ar bangla dub channel gayeb koira dise yt ….",
+   "gold": "আমার ৯কে সাবস্ক্রাইব এর বাংলা ডাব চ্যানেল গায়েব কইরা দিসে ওয়াইটি ….",
+   "hyp": "আমার কি সাবস্ক্রাইব আর বাংলা ডাব চ্যানেল গায়েব কইরা দিসে তাই"
+  },
+  {
+   "roman": "Keu Ring id coin nite chaile contact koren….1200 coin ace",
+   "gold": "কেউ রিং আইডি কয়েন নিতে চাইলে কন্টাক্ট করেন ….১২০০ কয়েন আছে",
+   "hyp": "কেউ রিং আইডি কয়েন নিতে চাইলে কন্টাক্ট করেন কয়েন আছে"
+  },
+  {
+   "roman": "vai game ar to kichu bujhtechina",
+   "gold": "ভাই গেম এর তো কিছু বুঝতেছিনা",
+   "hyp": "ভাই গেম আর তো কিছু বুঝতেছিনা"
+  },
+  {
+   "roman": "bro kom takay beshi fb mb kivabe kene?",
+   "gold": "ব্রো কম টাকায় বেশি এফবি এমবি কিভাবে কেনে ?",
+   "hyp": "ব্রো কম টাকায় বেশি এফবি এমবি কিভাবে কেন"
+  },
+  {
+   "roman": "ok vi airtel sim ase active korta lagbe",
+   "gold": "ওকে ভাই এয়ারটেল সিম আছে এক্টিভ করতে লাগবে",
+   "hyp": "ওকে ভাই এয়ারটেল সিম আসে একটিভ করতে লাগবে"
+  },
+  {
+   "roman": "Ara vi ata to old post ami jani akta app change dila apnar nAm bolba",
+   "gold": "আরে ভাই এটা তো ওল্ড পোস্ট আমি জানি একটা এপ চেঞ্জ দিলে আপনার নাম বলব",
+   "hyp": "আর ভাই এটা তো ওল্ড পোস্ট আমি জানি একটা অ্যাপ চেঞ্জ দিলে আপনার নাম বলবা"
+  },
+  {
+   "roman": "use apk editor",
+   "gold": "ইউস এপিকে এডিটর",
+   "hyp": "ইউজ এপিকে এডিটর"
+  },
+  {
+   "roman": "sob to dekhi fak",
+   "gold": "সব তো দেখি ফেক",
+   "hyp": "সব তো দেখি ফাক"
+  },
+  {
+   "roman": "earn to hobe na..coz..keo ad dite asbe na so majkhane ami payment dite dite fokir hoye jabo..",
+   "gold": "আর্ন তো হবে না ..কজ..কেউ এড দিতে আসবে না সো মাঝখানে আমি পেমেন্ট দিতে দিতে ফকির হয়ে যাবো ..",
+   "hyp": "আর্ন তো হবে নাকোজকেও অ্যাড দিতে আসবে না সো মাঝখানে আমি পেমেন্ট দিতে দিতে ফকির হয়ে যাবে"
+  },
+  {
+   "roman": "gmaio create korar system den",
+   "gold": "জিমেইল ক্রিয়েট করার সিস্টেম দেন",
+   "hyp": "গেম ক্রিয়েট করার সিস্টেম দেন"
+  },
+  {
+   "roman": "vhaiya ata vdo hobe thik moto hoitace na",
+   "gold": "ভাইয়া এটা ভিডিও হবে ঠিক মতো হইতাছে না",
+   "hyp": "ভাইয়া এটা ভিডিও হবে ঠিক মতো হইতেছে না"
+  },
+  {
+   "roman": "tnx 2 gb paici vai",
+   "gold": "থ্যাংক্স ২ জিবি পাইসি ভাই",
+   "hyp": "থ্যাংকস 2 জিবি পাইসি ভাই"
+  },
+  {
+   "roman": "fb.prothomalo.com – SSL Connection failed Error code 29 SSL is not supported 2018-08-21 13:36:22 UTC Your IP66.220.149.13Proxy IP107.154.249.36(ID 10731)Origin Server IPN/A Powered by Incapsula",
+   "gold": "fb.prothomalo.com – এসএসএল কানেকশন ফেলড এরর কোড ২৯ এসএসএল ইজ নট সাপোর্টেড ২০১৮-০৮-২১ ১৩:৩৬:২২ ইউটিসি ইওর আইপি৬৬.২২০.১৪৯.১৩প্রক্সি আইপি১০৭.১৫৪.২৪৯.৩৬(আইডি ১০৭৩১)অরিজিন সার্ভার আইপিএন/এ পাওয়ার্ড বাই ইনক্যাপসুলা",
+   "hyp": "এফবিপ্রথোমালোকম সালে কানেকশন ফেইলড এরর কোড 29 সালে ইস নট সাপোর্টেড 2018-08-21 13:36:22 উঠেছে ইউর ইপিআরকে ইপিওয়াপদা অরেগন সার্ভার ইউপিএন পাওয়ার্ড বাই ইনক্যাপসুলা"
+  },
+  {
+   "roman": "akhon youtube dekhte amr problem bro.heijonne to comment bro….ok tnx.porikkhar por dekhe nibo…………",
+   "gold": "এখন ইউটিউব দেখতে আমার প্রব্লেম ব্রো .হেইজন্যে তো কমেন্ট ব্রো ….ওকে থ্যাংক্স .পরীক্ষার পর দেখে নিবো …………",
+   "hyp": "এখন ইউটিউব দেখতে আমার প্রব্লেম বর্হিযৌনাঙ্গের তো কমেন্ট ব্রুক টিএনএক্সপরীক্ষার পর দেখে নিবো"
+  },
+  {
+   "roman": "ami thumbuell er post korci..but author na….tai…fb te asho ami kore dibo facebook.com/jgjgmga",
+   "gold": "আমি থাম্বয়েল এর পোস্ট করসি ..বাট অথর না ….তাই …এফবি তে আসো আমি করে দিবো facebook.com/jgjgmga",
+   "hyp": "আমি তামাবিল এর পোস্ট করাচীভিত্তিক অথর নাতাইফব তে আসো আমি করে দিবো ফেসবুককমজেজগ্মগা"
+  },
+  {
+   "roman": "2nd kormo dibos kobe?",
+   "gold": "সেকেন্ড কর্ম দিবস কবে ?",
+   "hyp": "নদী কর্ম দিবস কবে"
+  },
+  {
+   "roman": "je kono 1ta dilei hbe",
+   "gold": "যে কোনো ১টা দিলেই হবে",
+   "hyp": "যে কোন এটা দিলেই হবে"
+  },
+  {
+   "roman": "ha ha 3dot e click korle shob beriye ashbe, onek poor app poweramp er 10 vager 1 vag feature o nai pamp 14 day trial e bujte parvenna purchase kore use koren bujte parven",
+   "gold": "হা হা ৩ডট এ ক্লিক করলে সব বেরিয়ে আসবে, অনেক পোর অ্যাপ পাওরাম্প এর ১০ ভাগের ১ ভাগ ফীচার ও নাই পাম্প ১৪ ডে ট্রায়াল এ বুঝতে পারবেননা পার্চেজ করে উইজ করেন বুঝতে পারবেন",
+   "hyp": "হা হা দিতে এ ক্লিক করলে সব বেরিয়ে আসবে অনেক পরে অ্যাপ পাওয়ারম্প এর 10 ভাগের 1 ভাগ ফিচার ও নাই পাম্প 14 দেয় ট্রায়াল এ বুঝতে পারবেন পারচেজ করে ইউজ করেন বুঝতে পারবেন"
+  },
+  {
+   "roman": "bro, Amr mobile to Emon ekti Aka akai aseche, ami kichui buji eta kivabe sorabo ami.bt eta ki mble thakle kono problem hobe hobe.r Eta diye ki kaj kora jai. jante cai.",
+   "gold": "ব্রো, আমার মোবাইল তো এমন একটি একা একাই এসেছে, আমি কিছুই বুঝি এটা কিভাবে সরাবো আমি।বাট এটা কি মোবাইল থাকলে কোনো প্রব্লেম হবে হবে।আর এটা দিয়ে কি কাজ করা যায়। জানতে চায়।",
+   "hyp": "ব্রো আমার মোবাইল তো এমন একটি আঁকা একাই এসেছে আমি কিছুই বুঝি এটা কিভাবে সরাবো আমবাত এটা কি মোবাইল থাকলে কোনো প্রব্লেম হবে হবার এটা দিয়ে কি কাজ করা যায় জানতে চাই"
+  },
+  {
+   "roman": "Vaiya Ami normal app gulor khota bolechi sobai to paid use Kore na",
+   "gold": "ভাইয়া আমি নরমাল এপ গুলোর কথা বলেছি সবাই তো পেইড উইজ করে না",
+   "hyp": "ভাইয়া আমি নরমাল অ্যাপ গুলোর কথা বলেছি সবাই তো পেইড ইউজ করে না"
+  }
+ ]
+}
