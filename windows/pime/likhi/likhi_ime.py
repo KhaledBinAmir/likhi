@@ -137,7 +137,7 @@ class LikhiTextService(TextService):
         self.addButton(
             "likhi-mode",
             icon=os.path.join(HERE, "icon.ico"),
-            tooltip="Likhi: Bangla / English (%s)" % self.cfg["toggle_key"],
+            tooltip="Likhi: Bangla / English ({})".format(self.cfg["toggle_key"]),
             commandId=ID_TOGGLE,
         )
         try:

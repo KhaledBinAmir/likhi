@@ -39,6 +39,10 @@ class Feats:
     avro: bool = False
     lex_score: int = 0  # corpus score (wiki + 3 subs + 20 chat)
     in_lexicon: bool = False
+    is_latin: bool = False  # the raw typed string offered as an English passthrough
+    personal_sel: float = 0.0  # decayed count of times the user chose this word for this roman
+    personal_share: float = 0.0  # that count as a share of all choices for this roman
+    personal_word: float = 0.0  # decayed count of times the user chose this word at all
     sources: set[str] = field(default_factory=set)
 
 
@@ -55,6 +59,10 @@ DEFAULT_WEIGHTS = {
     "xlit_top3": 0.7,
     "avro": 0.8,
     "oov": -3.0,
+    "personal_sel": 3.0,
+    "personal_word": 0.6,
+    "latin_base": -10.0,  # stands in for the unigram term of a raw-Latin candidate
+    "latin": -4.0,
 }
 
 
@@ -70,7 +78,11 @@ class LikhiEngine:
         model_scored: int = 16,
         use_avro: bool = True,
         use_xlit: bool = True,
+        personal: object | None = None,
+        personal_path: Path | str | None = None,
     ) -> None:
+        """``personal``: a PersonalStore, or None to disable learning (evaluation runs).
+        ``personal_path``: create a PersonalStore at this path (default location when "default")."""
         import marisa_trie
 
         lexicon_dir = Path(lexicon_dir)
@@ -110,7 +122,21 @@ class LikhiEngine:
                 self._avro = avro.parse
             except Exception:
                 self._avro = None
+        self.personal = personal
+        if personal is None and personal_path is not None:
+            from likhi.engine.personal import PersonalStore
+
+            self.personal = PersonalStore(None if personal_path == "default" else personal_path)
         self._suggest_cached = lru_cache(maxsize=4096)(self._suggest)
+
+    # ------------------------------------------------------------------ learning
+
+    def learn(self, roman: str, chosen: str, context: Sequence[str] = ()) -> None:
+        """Record a commit. Called by the shell whenever the user commits a candidate."""
+        if self.personal is None or not roman or not chosen:
+            return
+        self.personal.learn(roman, chosen, tuple(context))
+        self._suggest_cached.cache_clear()
 
     # ------------------------------------------------------------------ features
 
@@ -214,6 +240,21 @@ class LikhiEngine:
                 ft.avro = True
                 ft.sources.add("avro")
 
+        # 5. personal history: previously chosen words for this roman (including the raw Latin)
+        if self.personal is not None:
+            sel = self.personal.selections(r)
+            total = sum(sel.values()) or 1.0
+            for word, count in sel.items():
+                ft = f(word)
+                if word == r or word == roman:
+                    ft.is_latin = True
+                ft.personal_sel = count
+                ft.personal_share = count / total
+                ft.sources.add("personal")
+            for word, ft in feats.items():
+                if not ft.is_latin:
+                    ft.personal_word = self.personal.word_count(word)
+
         # Model scores for the most promising candidates only (batched teacher forcing is the
         # expensive step; everything else is a trie lookup).
         if self.xlit is not None and feats:
@@ -245,6 +286,12 @@ class LikhiEngine:
 
     def score(self, word: str, ft: Feats, roman: str, context: Sequence[str] = ()) -> float:
         w = self.w
+        if ft.is_latin:
+            # Raw Latin is only a candidate once the user has chosen it before; it competes on
+            # personal evidence, not on Bangla corpus frequency.
+            s = w["latin_base"] + w["latin"]
+            s += w["personal_sel"] * (math.log1p(ft.personal_sel) + 3.0 * ft.personal_share)
+            return s
         s = w["unigram"] * self.unigram_logp(word)
         if ft.rom_exact:
             s += w["rom_exact"] + w["rom_exact_log"] * math.log(1 + ft.rom_exact)
@@ -270,6 +317,10 @@ class LikhiEngine:
             s += w["avro"]
         if not ft.in_lexicon:
             s += w["oov"]
+        if ft.personal_sel:
+            s += w["personal_sel"] * (math.log1p(ft.personal_sel) + 3.0 * ft.personal_share)
+        if ft.personal_word:
+            s += w["personal_word"] * math.log1p(ft.personal_word)
         return s
 
     def _suggest(self, roman: str, k: int) -> tuple[str, ...]:

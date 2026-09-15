@@ -42,7 +42,7 @@ def write_ico(path: Path, sizes=(16, 32)) -> None:
     images = [_image(s) for s in sizes]
     offset = 6 + 16 * len(images)
     out = bytearray(struct.pack("<HHH", 0, 1, len(images)))
-    for s, img in zip(sizes, images):
+    for s, img in zip(sizes, images, strict=True):
         out += struct.pack("<BBBBHHII", s % 256, s % 256, 0, 0, 1, 32, len(img), offset)
         offset += len(img)
     for img in images:
