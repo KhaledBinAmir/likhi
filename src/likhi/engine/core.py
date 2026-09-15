@@ -72,6 +72,52 @@ DEFAULT_WEIGHTS = {
 
 UNKNOWN_CONFIDENT_LOGP = -11.0  # log-prior given to an unknown word the model is sure about
 
+# Bengali spellings of English letter names. The transliteration model reads vowel-less shorthand
+# such as "amr" or "tmi" as an acronym (এএমআর, টিএমআই) with high confidence; those readings must
+# not enjoy the confident-unknown-word relief, otherwise they beat আমার / তুমি.
+_LETTER_NAMES = (
+    "ডব্লিউ",
+    "এইচ",
+    "কিউ",
+    "এক্স",
+    "ওয়াই",
+    "জেড",
+    "এফ",
+    "এম",
+    "এন",
+    "এল",
+    "এস",
+    "আর",
+    "বি",
+    "সি",
+    "ডি",
+    "ই",
+    "জি",
+    "জে",
+    "কে",
+    "পি",
+    "টি",
+    "ইউ",
+    "ভি",
+    "ও",
+    "আই",
+    "এ",
+)
+
+
+def looks_like_acronym(word: str) -> bool:
+    """True when the word can be segmented into two or more English letter names."""
+    i, n, parts = 0, len(word), 0
+    while i < n:
+        for name in _LETTER_NAMES:
+            if word.startswith(name, i):
+                i += len(name)
+                parts += 1
+                break
+        else:
+            return False
+    return parts >= 2
+
 
 class AbortedError(Exception):
     """Raised when a suggestion computation was abandoned because newer input arrived."""
@@ -389,7 +435,8 @@ class LikhiEngine:
             )
         uni = self.unigram_logp(word)
         xl = ft.xlit_logp
-        if not ft.in_lexicon and xl == xl:
+        acronym = (not ft.in_lexicon) and looks_like_acronym(word)
+        if not ft.in_lexicon and xl == xl and not acronym:
             # Unknown words sit at the unigram floor, a hidden second penalty. When the model is
             # confident the word is real, lift the prior towards that of a rare-but-real word.
             confidence = 1.0 - min(1.0, max(0.0, -xl / 3.0))
@@ -424,8 +471,8 @@ class LikhiEngine:
             # The unknown-word penalty encodes "probably not a real word". A confident model is
             # evidence to the contrary: at log P > -3 the penalty fades, at log P ~ 0 it vanishes
             # (খাইতেছো for "khaitecho" is unknown to the lexicon but certain for the model).
-            xl = ft.xlit_logp
-            scale = 1.0 if xl != xl else min(1.0, max(0.0, -xl / 3.0))
+            # Acronym readings of shorthand keep the full penalty.
+            scale = 1.0 if (xl != xl or acronym) else min(1.0, max(0.0, -xl / 3.0))
             s += w["oov"] * scale
         if ft.personal_sel:
             s += personal_bonus(w, ft.personal_sel, ft.personal_share)

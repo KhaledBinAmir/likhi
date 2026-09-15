@@ -25,6 +25,15 @@ def test_coarse_keys_match(romans, bangla):
         assert key_from_roman(r, "coarse") == target, (r, key_from_roman(r, "coarse"), target)
 
 
+def test_semivowel_y_does_not_create_a_slot():
+    # কোরিয়া is typed koria / koriya / korea; all must reach the same fine key as the word
+    target = key_from_bangla("কোরিয়া", "fine")
+    for r in ("koria", "koriya", "korea"):
+        assert key_from_roman(r, "fine") == target, (r, key_from_roman(r, "fine"), target)
+    # and a word-initial y is a consonant (yeno = যেন)
+    assert key_from_roman("yeno", "coarse") == key_from_bangla("যেন", "coarse")
+
+
 def test_fine_keeps_aspiration():
     assert key_from_roman("khali", "fine") != key_from_roman("kali", "fine")
     assert key_from_bangla("খালি", "fine") == key_from_roman("khali", "fine")

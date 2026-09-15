@@ -173,13 +173,23 @@ _COARSE_VOWEL = {
 
 
 def _finalize(units: list[str], level: str) -> str:
-    """Drop non-initial vowels, apply coarse merges, collapse repeats."""
+    """Drop non-initial vowels, apply coarse merges, collapse repeats.
+
+    The semivowel unit "y" (roman y, Bangla য়) behaves like a vowel at both levels: people write
+    কোরিয়া as koria, koriya or korea, so it must not create a consonant slot. A word-initial y is a
+    consonant (yeno = যেন) and maps to j.
+    """
     out: list[str] = []
     for i, u in enumerate(units):
         if u.startswith("V"):
             if i == 0:
                 out.append(_COARSE_VOWEL[u] if level == "coarse" else u[1:])
             continue
+        if u == "y":
+            if i == 0:
+                u = "j"
+            else:
+                continue
         if level == "coarse":
             u = _COARSE.get(u, u)
             if not u:
@@ -187,7 +197,7 @@ def _finalize(units: list[str], level: str) -> str:
         if out and out[-1] == u:
             continue
         out.append(u)
-    return "".join(out) if level == "fine" else "".join(out)
+    return "".join(out)
 
 
 def _bangla_units(word: str) -> list[str]:
