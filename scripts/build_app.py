@@ -41,6 +41,10 @@ def build(out: Path) -> None:
     cmd = [
         str(csc),
         "/nologo",
+        # The source is UTF-8 and contains Bangla and typographic punctuation. Without this csc
+        # reads it in the system code page and every one of those characters comes out as mojibake
+        # in the built window -- which is exactly what happened once.
+        "/codepage:65001",
         "/target:winexe",  # no console window
         "/optimize+",
         "/platform:anycpu",

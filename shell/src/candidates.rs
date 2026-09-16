@@ -25,6 +25,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 // Direct2D points are plain vectors from a sibling crate; windows 0.62 has no D2D_POINT_2F alias.
 use windows_numerics::Vector2;
 
+use crate::config::Config;
 use crate::log;
 
 const CLASS_NAME: PCWSTR = w!("LikhiCandidateWindow");
@@ -135,6 +136,10 @@ struct Inner {
     dwrite: Option<IDWriteFactory>,
     format: Option<IDWriteTextFormat>,
     target: Option<ID2D1HwndRenderTarget>,
+    /// Config stamp the current text format was built from, so a font chosen in the Likhi window
+    /// takes effect while typing rather than at the next sign-in.
+    config_stamp: u64,
+    last_checked: Option<std::time::Instant>,
 }
 
 pub struct CandidateWindow {
@@ -163,6 +168,8 @@ impl CandidateWindow {
             dwrite: None,
             format: None,
             target: None,
+            config_stamp: 0,
+            last_checked: None,
         }));
         let hwnd = unsafe {
             CreateWindowExW(
@@ -347,18 +354,55 @@ impl Inner {
         if dpi == 0 { 1.0 } else { dpi as f32 / 96.0 }
     }
 
+    /// Drop the text format when the config has changed, so the next draw rebuilds it.
+    /// Checked at most once a second: this runs per keystroke and a file stat is not free.
+    fn watch_config(&mut self) {
+        let now = std::time::Instant::now();
+        if let Some(last) = self.last_checked {
+            if now.duration_since(last) < std::time::Duration::from_secs(1) {
+                return;
+            }
+        }
+        self.last_checked = Some(now);
+        let stamp = crate::config::stamp();
+        if stamp != self.config_stamp {
+            self.config_stamp = stamp;
+            self.format = None;
+        }
+    }
+
     fn ensure_dwrite(&mut self) -> Option<()> {
+        self.watch_config();
         if self.format.is_some() {
             return Some(());
         }
+        let config = Config::load();
         unsafe {
             let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).ok()?;
-            let family = FONT_CHAIN
-                .iter()
-                .copied()
-                .find(|f| family_available(&dwrite, *f))
-                .unwrap_or(FONT_CHAIN[FONT_CHAIN.len() - 1]);
-            log!("candidate window font: {}", family.display());
+            // A font named in the config wins if it is installed; otherwise the built-in chain.
+            let chosen: Vec<u16> = config
+                .font_name
+                .trim()
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+            let named = config.font_name.trim().is_empty().then_some(()).is_none()
+                && family_available(&dwrite, PCWSTR(chosen.as_ptr()));
+            let family = if named {
+                PCWSTR(chosen.as_ptr())
+            } else {
+                FONT_CHAIN
+                    .iter()
+                    .copied()
+                    .find(|f| family_available(&dwrite, *f))
+                    .unwrap_or(FONT_CHAIN[FONT_CHAIN.len() - 1])
+            };
+            let size = if config.font_size >= 8.0 && config.font_size <= 48.0 {
+                config.font_size
+            } else {
+                FONT_DIP
+            };
+            log!("candidate window font: {} at {}px", family.display(), size);
             let format = dwrite
                 .CreateTextFormat(
                     family,
@@ -366,7 +410,7 @@ impl Inner {
                     DWRITE_FONT_WEIGHT_NORMAL,
                     DWRITE_FONT_STYLE_NORMAL,
                     DWRITE_FONT_STRETCH_NORMAL,
-                    FONT_DIP,
+                    size,
                     w!("bn-BD"),
                 )
                 .ok()?;

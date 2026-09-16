@@ -119,5 +119,21 @@ fn read_object(path: &PathBuf) -> Option<serde_json::Map<String, serde_json::Val
     }
 }
 
+/// Newest modification time across the config files, as a cheap "has anything changed" stamp.
+///
+/// The candidate window watches this so a font chosen in the Likhi window takes effect while
+/// someone is typing, rather than at the next sign-in. Two `stat` calls, taken at most once a
+/// second and never on the path of a keystroke that is being handled.
+pub fn stamp() -> u64 {
+    search_paths()
+        .iter()
+        .filter_map(|p| std::fs::metadata(p).ok())
+        .filter_map(|m| m.modified().ok())
+        .filter_map(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .max()
+        .unwrap_or(0)
+}
+
 /// Bengali digits, indexed by value.
 pub const BANGLA_DIGITS: [&str; 10] = ["০", "১", "২", "৩", "৪", "৫", "৬", "৭", "৮", "৯"];
