@@ -180,7 +180,11 @@ Source: "..\assets\fonts\TiroBangla-Regular.ttf"; DestDir: "{autofonts}"; FontIn
 Source: "..\assets\fonts\*-OFL.txt"; DestDir: "{app}\fonts"; Flags: ignoreversion
 ; The window people open from the Start menu: status, how to switch, and the settings that are
 ; theirs to make. Needs no runtime of its own -- .NET Framework 4 is part of Windows.
-Source: "..\dist\Likhi.exe"; DestDir: "{app}"; Flags: ignoreversion
+; restartreplace as a safety net. This is the one file a person is likely to have open while
+; upgrading, and a lock on it aborted the whole install and rolled it back. It is stopped by name in
+; [Code] first; if something still holds it -- an antivirus scanning a file written seconds ago will
+; -- the replacement is scheduled instead of the upgrade failing.
+Source: "..\dist\Likhi.exe"; DestDir: "{app}"; Flags: ignoreversion restartreplace
 ; Per-user keyboard setup and documentation.
 Source: "enable_keyboard.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "disable_keyboard.ps1"; DestDir: "{app}"; Flags: ignoreversion
@@ -275,7 +279,13 @@ begin
             'Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"';
   RunHidden('powershell.exe', Script, Code);
   RunHidden(ExpandConstant('{sys}\taskkill.exe'), '/f /im PIMELauncher.exe', Code);
-  Sleep(700);
+  { By name as well as by path. The Likhi window is the one file here a person is likely to have
+    open while upgrading -- it is what they opened to find the download -- and the path match above
+    depends on Win32_Process reporting ExecutablePath, which it does not always do. Without this an
+    upgrade fails on "DeleteFile failed; code 5" and rolls itself back, which is exactly what it did
+    on the development machine. }
+  RunHidden(ExpandConstant('{sys}\taskkill.exe'), '/f /im Likhi.exe', Code);
+  Sleep(900);
 end;
 
 { Take the old PIME keyboard out of the picker before installing ours.
