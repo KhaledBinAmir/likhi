@@ -209,12 +209,12 @@ def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1") -> None:
     print(f"[likhi-server] engine ready in {(time.perf_counter() - t0) * 1000:.0f} ms", flush=True)
     from likhi.telemetry import Telemetry
 
-    mode, drop = _telemetry_config()
-    telemetry = Telemetry(mode, drop=drop)
-    if mode != "off":
+    cfg = _telemetry_config()
+    telemetry = Telemetry(cfg["mode"], drop=cfg["drop"], endpoint=cfg["endpoint"], key=cfg["key"])
+    if cfg["mode"] != "off":
+        where = ", ".join(x for x in (cfg["drop"], cfg["endpoint"]) if x) or "local only"
         print(
-            f"[likhi-server] telemetry: {mode} (local files in {telemetry.dir}"
-            + (f", drop {drop})" if drop else ")"),
+            f"[likhi-server] telemetry: {cfg['mode']} (files in {telemetry.dir}; ships to {where})",
             flush=True,
         )
 
@@ -223,8 +223,13 @@ def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1") -> None:
         srv.telemetry = telemetry  # type: ignore[attr-defined]
         stop = threading.Event()
 
-        def _flusher() -> None:  # hourly rows even if the user keeps typing
-            while not stop.wait(300):
+        # Sync interval. Each round is at most one upload per stream, so this sets the request
+        # rate: 15 minutes keeps a pilot inside Cloud Storage's 5,000 free writes a month, and
+        # nothing is lost in between because the local files are the source of truth.
+        interval = float(cfg["sync_seconds"])
+
+        def _flusher() -> None:
+            while not stop.wait(interval):
                 telemetry.flush()
 
         threading.Thread(target=_flusher, daemon=True).start()
@@ -238,15 +243,21 @@ def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1") -> None:
             telemetry.flush()
 
 
-def _telemetry_config() -> tuple[str, str | None]:
-    """(mode, drop folder). mode: off (default) / metrics / full.
+def _telemetry_config() -> dict:
+    """mode (off/metrics/full), drop folder, HTTPS endpoint, shared key.
 
-    From LIKHI_TELEMETRY and LIKHI_TELEMETRY_DROP, else the shell's config.json keys
-    "telemetry" and "telemetry_drop".
+    Environment wins (LIKHI_TELEMETRY, LIKHI_TELEMETRY_DROP, LIKHI_TELEMETRY_ENDPOINT,
+    LIKHI_TELEMETRY_KEY), else the shell's config.json.
     """
     env = os.environ.get("LIKHI_TELEMETRY")
     if env:
-        return env.strip().lower(), os.environ.get("LIKHI_TELEMETRY_DROP") or None
+        return {
+            "mode": env.strip().lower(),
+            "drop": os.environ.get("LIKHI_TELEMETRY_DROP") or None,
+            "endpoint": os.environ.get("LIKHI_TELEMETRY_ENDPOINT") or None,
+            "key": os.environ.get("LIKHI_TELEMETRY_KEY") or None,
+            "sync_seconds": float(os.environ.get("LIKHI_TELEMETRY_SYNC_S") or 900),
+        }
     for path in (
         Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"))
         / "PIME"
@@ -259,10 +270,16 @@ def _telemetry_config() -> tuple[str, str | None]:
         try:
             if path.exists():
                 cfg = json.loads(path.read_text(encoding="utf-8"))
-                return str(cfg.get("telemetry", "off")).lower(), cfg.get("telemetry_drop") or None
+                return {
+                    "mode": str(cfg.get("telemetry", "off")).lower(),
+                    "drop": cfg.get("telemetry_drop") or None,
+                    "endpoint": cfg.get("telemetry_endpoint") or None,
+                    "key": cfg.get("telemetry_key") or None,
+                    "sync_seconds": float(cfg.get("telemetry_sync_seconds") or 900),
+                }
         except Exception:
             pass
-    return "off", None
+    return {"mode": "off", "drop": None, "endpoint": None, "key": None, "sync_seconds": 900.0}
 
 
 def main(argv: list[str] | None = None) -> int:

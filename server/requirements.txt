@@ -1,0 +1,2 @@
+# Only the cloud deployment needs this. Running ingest_server.py with --data uses no dependencies.
+google-cloud-storage>=2.18

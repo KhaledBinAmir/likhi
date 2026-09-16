@@ -37,7 +37,89 @@ Note on password boxes: Windows normally does not route password fields through 
 composition does not happen there. The digit and symbol rules are the real safety net, not that
 behaviour, which varies by application.
 
-## Collecting logs from several machines
+## Collecting logs over the internet (the production path)
+
+Use this rather than a LAN folder if you want the pilot to exercise the same mechanism a public
+release will use. The client posts newline-delimited JSON over HTTPS with the Python standard
+library, so the keyboard gains no dependency.
+
+Client config on each machine:
+
+```json
+"telemetry": "full",
+"telemetry_endpoint": "https://likhi-ingest-xxxxx.run.app/v1/ingest",
+"telemetry_key": "a-long-random-string",
+"telemetry_sync_seconds": 3600
+```
+
+### Deploying the endpoint on Google Cloud
+
+`server/ingest_server.py` is the whole server, standard library plus one client library when it
+writes to Cloud Storage. It stores the same object layout as the folder drop, so everything
+downstream is unchanged.
+
+```
+gcloud storage buckets create gs://likhi-telemetry --location us-central1
+gcloud run deploy likhi-ingest --source server --region us-central1 \
+    --set-env-vars LIKHI_INGEST_BUCKET=likhi-telemetry,LIKHI_INGEST_KEY=a-long-random-string \
+    --allow-unauthenticated --min-instances 0
+```
+
+`--min-instances 0` lets it scale to zero, so an idle pilot runs no instances at all. Cloud Run
+gives the container's service account write access to the bucket by granting it the Storage Object
+Admin role, or run `gcloud storage buckets add-iam-policy-binding` for the service account it
+creates.
+
+To read the data back:
+
+```
+gcloud storage cp -r gs://likhi-telemetry/* ./pilot
+likhi-report collect --drop ./pilot
+```
+
+### What it costs
+
+Always-free allowances, as published by Google at the time of writing:
+
+| Service | Always free per month |
+|---|---|
+| Cloud Run | 2 million requests, 180,000 vCPU-seconds, 360,000 GB-seconds, 1 GB egress from North America |
+| Cloud Storage | 5 GB-months in `us-east1`, `us-west1` or `us-central1`, 5,000 Class A operations, 50,000 Class B operations |
+| Firestore (alternative store) | 1 GiB, 50,000 reads / 20,000 writes / 20,000 deletes per day |
+
+A ten-person pilot sends roughly one small upload per stream per active hour. At
+`telemetry_sync_seconds: 3600` that is about 3,800 uploads a month, inside both the Cloud Run
+request allowance and the 5,000 free Cloud Storage writes, so the pilot costs nothing. Dropping to
+15-minute syncs is more responsive and pushes writes past the free allowance, costing a few cents
+a month. Storage itself is negligible: the data is a few kilobytes per person per day.
+
+For a public release at, say, ten thousand users syncing once a day, that is about 300,000 requests
+a month, still inside Cloud Run's free tier, with Cloud Storage writes running to a dollar or two.
+Firestore is the alternative if you would rather query than download files; its 20,000 writes a day
+covers far more users, at the cost of a different layout than `likhi-report collect` expects.
+
+### Self-hosting instead
+
+The same file runs on any always-on machine with no cloud account:
+
+```
+python server/ingest_server.py --data D:\likhi-telemetry --key a-long-random-string --port 8098
+```
+
+Put it behind a reverse proxy for a certificate, or pass `--certfile` and `--keyfile`. Clients then
+point at `https://your-host/v1/ingest`.
+
+### What the endpoint guarantees
+
+- The install id and stream name are matched against strict patterns before any path is built, so a
+  hostile header cannot escape the data directory. Covered by a test.
+- A repeated chunk sequence number is accepted and ignored, which makes a client retry after a
+  half-finished upload harmless. Covered by a test.
+- Bodies are capped at 1 MB and must be newline-delimited JSON objects.
+- Client IP addresses are not recorded.
+- Requests without the shared key are refused.
+
+## Collecting logs from several machines on a LAN
 
 No server software, no open ports. Each machine appends to its own local file, and a background
 task copies **only the new bytes** to a folder you own, as immutable numbered chunks:

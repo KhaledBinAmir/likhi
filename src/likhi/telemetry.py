@@ -39,6 +39,8 @@ _RE_UNSAFE = re.compile(r"[\d@:/\\]")
 # exit, and TerminateProcess cannot be caught, so counters must not sit in memory for an hour.
 # Rows carry their hour bucket, so several rows per hour simply sum at collection time.
 FLUSH_EVERY = 20
+MAX_CHUNK_BYTES = 256 * 1024  # cap one upload, so a machine offline for a week catches up in steps
+HTTP_TIMEOUT_S = 10.0
 
 DEFAULT_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "Likhi"
 
@@ -64,10 +66,16 @@ class Telemetry:
         mode: str = "off",
         directory: Path | str | None = None,
         drop: Path | str | None = None,
+        endpoint: str | None = None,
+        key: str | None = None,
     ) -> None:
+        """``drop``: a folder (LAN share, synced folder). ``endpoint``: an HTTPS ingest URL.
+        Either, both, or neither. Both use the same offset bookkeeping, so a chunk is sent once."""
         self.mode = mode if mode in ("off", "metrics", "full") else "off"
         self.dir = Path(directory) if directory else DEFAULT_DIR
         self.drop = Path(drop) if drop else None
+        self.endpoint = endpoint or None
+        self.key = key or None
         self.lock = threading.Lock()
         self.counters: Counter[str] = Counter()
         self.latencies: list[float] = []
@@ -178,22 +186,59 @@ class Telemetry:
                 self._flush_locked()
         except Exception:
             pass
-        if self.drop:
+        if self.drop or self.endpoint:
             self.sync()
 
-    # ------------------------------------------------------------------ remote drop
+    # ------------------------------------------------------------------ shipping
 
-    def sync(self, drop: Path | str | None = None) -> dict:
-        """Ship new lines to a drop folder (an SMB share, a synced folder, any path).
+    def _send_folder(self, target: Path, stream: str, seq: int, chunk: bytes) -> None:
+        out_dir = target / self.install_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        name = f"{stream.split('.')[0]}-{seq:05d}.jsonl"
+        tmp = out_dir / (name + ".part")
+        tmp.write_bytes(chunk)
+        tmp.replace(out_dir / name)  # atomic publish: readers never see a half file
 
-        Only the bytes written since the last successful sync are sent, as immutable chunk files
-        under ``<drop>/<install_id>/``. Immutable chunks mean no append races between machines, no
-        locking, and a retry can never duplicate or corrupt anything. If the share is unreachable
-        the offsets are not advanced and the next attempt sends the same bytes.
+    def _send_http(self, url: str, stream: str, seq: int, chunk: bytes) -> None:
+        """POST one chunk as newline-delimited JSON. Raises on any non-2xx or transport error.
+
+        The install id, stream and sequence number go in headers so the receiver can store chunks
+        under the same layout as the folder drop and ignore a duplicate sequence number, which is
+        what makes a retry after a half-finished request safe.
+        """
+        import urllib.request
+
+        req = urllib.request.Request(
+            url,
+            data=chunk,
+            method="POST",
+            headers={
+                "Content-Type": "application/x-ndjson",
+                "X-Likhi-Install": self.install_id,
+                "X-Likhi-Stream": stream.split(".")[0],
+                "X-Likhi-Seq": str(seq),
+                "X-Likhi-Version": "1",
+                **({"X-Likhi-Key": self.key} if self.key else {}),
+            },
+        )
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
+            if not 200 <= resp.status < 300:
+                raise OSError(f"ingest returned {resp.status}")
+
+    def sync(self, drop: Path | str | None = None, endpoint: str | None = None) -> dict:
+        """Ship new lines to the configured destinations.
+
+        Only the bytes written since the last successful sync are sent, as immutable numbered
+        chunks. Immutable chunks mean no append races between machines, no locking, and a retry
+        can never duplicate or corrupt anything: if a destination is unreachable the offset is not
+        advanced and the next attempt sends exactly the same bytes under the same sequence number.
+
+        Runs on a background thread only. Never call it from a keystroke path.
         """
         target = Path(drop) if drop else self.drop
-        if not target:
-            return {"sent": 0, "error": "no drop folder configured"}
+        url = endpoint or self.endpoint
+        if not target and not url:
+            return {"sent": 0, "error": "no drop folder or endpoint configured"}
         state_path = self.dir / "sync_state.json"
         try:
             state = (
@@ -202,37 +247,46 @@ class Telemetry:
         except Exception:
             state = {}
         sent = 0
-        try:
-            out_dir = target / self.install_id
-            out_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            return {"sent": 0, "error": f"{type(e).__name__}: {e}"}
+        errors: list[str] = []
         for stream in ("metrics.jsonl", "events.jsonl"):
             src = self.dir / stream
             if not src.exists():
                 continue
             offset = int(state.get(stream, 0))
             size = src.stat().st_size
-            if size <= offset:
-                if size < offset:  # file was rotated or deleted: start over
-                    state[stream] = 0
-                continue
-            try:
-                with open(src, "rb") as f:
-                    f.seek(offset)
-                    chunk = f.read()
-                seq = int(state.get(stream + ".seq", 0)) + 1
-                name = f"{stream.split('.')[0]}-{seq:05d}.jsonl"
-                tmp = out_dir / (name + ".part")
-                tmp.write_bytes(chunk)
-                tmp.replace(out_dir / name)  # atomic publish
-                state[stream] = offset + len(chunk)
-                state[stream + ".seq"] = seq
-                sent += chunk.count(b"\n")
-            except Exception as e:
-                return {"sent": sent, "error": f"{type(e).__name__}: {e}"}
+            if size < offset:  # file was rotated or deleted: start over
+                offset = state[stream] = 0
+            while offset < size:
+                try:
+                    with open(src, "rb") as f:
+                        f.seek(offset)
+                        chunk = f.read(MAX_CHUNK_BYTES)
+                    # never split a line across chunks
+                    cut = chunk.rfind(b"\n")
+                    if cut == -1:
+                        break  # a partial line is still being written; wait for the next round
+                    chunk = chunk[: cut + 1]
+                    seq = int(state.get(stream + ".seq", 0)) + 1
+                    if target:
+                        self._send_folder(target, stream, seq, chunk)
+                    if url:
+                        self._send_http(url, stream, seq, chunk)
+                    offset += len(chunk)
+                    state[stream] = offset
+                    state[stream + ".seq"] = seq
+                    sent += chunk.count(b"\n")
+                except Exception as e:
+                    errors.append(f"{stream}: {type(e).__name__}: {e}")
+                    break
         try:
             state_path.write_text(json.dumps(state), encoding="utf-8")
         except Exception:
             pass
-        return {"sent": sent, "drop": str(target)}
+        out: dict = {"sent": sent}
+        if target:
+            out["drop"] = str(target)
+        if url:
+            out["endpoint"] = url
+        if errors:
+            out["error"] = "; ".join(errors)
+        return out
