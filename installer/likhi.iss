@@ -8,6 +8,16 @@
 ; rights once and leaves the user with a working Bangla keyboard and nothing to configure.
 
 #define AppName "Likhi"
+; 0.2.3: the setting that pointed Bangla at a chosen font across the whole machine is removed,
+;        because it did not work. Windows has no Bangla font to change: an application asks for
+;        Segoe UI, which has no Bengali glyphs, and something else supplies them. Choosing that
+;        something is font linking, and font linking is a GDI mechanism -- modern applications draw
+;        through DirectWrite, which picks a fallback family itself and never reads those keys.
+;        Measured, not assumed: with the entries in place and the font installed machine-wide,
+;        Bangla under Segoe UI still rendered at Nirmala UI's exact metrics. The only thing that
+;        would work is replacing the system font file, which means breaking Windows servicing and
+;        the nine other Indic scripts Nirmala UI carries. A switch that does nothing is worse than
+;        no switch. The font picker still sets the suggestion list, and says so.
 ; 0.2.2: nothing chosen in the Likhi window was ever saved. Refresh2 saves and restores the
 ;        "loading" guard around its work, and during construction the saved value was true, so
 ;        clearing the guard inside it left the restore to put true straight back: the flag never
@@ -99,7 +109,7 @@
 ;        running engine with PowerShell rather than WMIC, which Windows 11 no longer ships.
 ; 0.1.1: the engine did not look for the shell's config.json in the installed layout, so a fresh
 ;        install never reported telemetry.
-#define AppVersion "0.2.2"
+#define AppVersion "0.2.3"
 #define AppPublisher "Khaled Bin Amir"
 #define AppURL "https://github.com/KhaledBinAmir/likhi"
 #define PimeSource "C:\Program Files (x86)\PIME"
