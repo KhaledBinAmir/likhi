@@ -26,7 +26,15 @@ Add-Type -AssemblyName System.Windows.Forms
 $TopColor    = [Drawing.Color]::FromArgb(255, 16, 138, 95)
 $BottomColor = [Drawing.Color]::FromArgb(255, 9, 95, 66)
 $InkColor    = [Drawing.Color]::White
+# Noto Sans Bengali if it is installed: its letterforms are more open at small sizes, which is the
+# whole problem this icon has. Falls back to the face Windows always has.
 $FontFamily  = 'Nirmala UI'
+try {
+    Add-Type -AssemblyName System.Drawing
+    if ((New-Object Drawing.Text.InstalledFontCollection).Families.Name -contains 'Noto Sans Bengali') {
+        $FontFamily = 'Noto Sans Bengali'
+    }
+} catch { }
 
 # At 16 and 20 pixels the matra of "লি" closes up into a blob, so the smallest sizes carry the bare
 # consonant. Same letter, same colour: it still reads as one mark across the set.
@@ -54,7 +62,7 @@ function Render([int]$size) {
     $g.Clear([Drawing.Color]::Transparent)
 
     # A full-bleed tile at 16px; the rounding only becomes visible once there are pixels to spare.
-    $inset = [Math]::Max(0.0, $size * 0.02)
+    $inset = [Math]::Max(0.0, $size * 0.01)
     $rect = New-Object Drawing.RectangleF($inset, $inset, ($size - 2 * $inset), ($size - 2 * $inset))
     $radius = [Math]::Max(2.0, $size * 0.22)
     $path = New-RoundedPath $rect $radius
@@ -63,28 +71,62 @@ function Render([int]$size) {
     $g.FillPath($brush, $path)
     $brush.Dispose(); $path.Dispose()
 
-    # Fit the glyph to a padded box by measuring at a reference size and scaling once, then nudging
-    # down while it still overflows. Measuring is cheap and guessing a point size is not portable.
-    # The bare consonant is wide and squat, so at the small sizes it needs more room around it or it
-    # touches the edges and the rounded corners stop reading as corners.
+    # Fit the glyph by its ink, not by its text box.
+    #
+    # A measured text box carries the font's full line height -- ascender and descender space that
+    # a Bangla letter without them simply does not use. Fitting to that box leaves the letter
+    # floating in a third of the tile, which is exactly why this icon read as small beside "ENG" in
+    # the keyboard picker. So the glyph is rendered once on a large canvas, its actual inked bounds
+    # are found, and it is then scaled and placed so that ink fills the tile.
     $text = Glyph $size
-    $pad = if ($size -le 24) { $size * 0.22 } else { $size * 0.16 }
+    $pad = if ($size -le 24) { $size * 0.08 } else { $size * 0.12 }
     $boxW = $size - 2 * $pad
     $boxH = $size - 2 * $pad
+
+    $probeSize = 256
+    $probe = New-Object Drawing.Bitmap($probeSize, $probeSize, [Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $pg = [Drawing.Graphics]::FromImage($probe)
+    $pg.Clear([Drawing.Color]::Transparent)
+    $pg.TextRenderingHint = [Drawing.Text.TextRenderingHint]::AntiAliasGridFit
+    $probeFont = New-Object Drawing.Font($FontFamily, ($probeSize * 0.5), [Drawing.FontStyle]::Bold, [Drawing.GraphicsUnit]::Pixel)
     $flags = [Windows.Forms.TextFormatFlags]::NoPadding -bor [Windows.Forms.TextFormatFlags]::SingleLine
-    $pt = [float]($size * 0.62)
-    for ($i = 0; $i -lt 24; $i++) {
-        $f = New-Object Drawing.Font($FontFamily, $pt, [Drawing.FontStyle]::Bold, [Drawing.GraphicsUnit]::Pixel)
-        $m = [Windows.Forms.TextRenderer]::MeasureText($g, $text, $f, (New-Object Drawing.Size(1000, 1000)), $flags)
-        if ($m.Width -le $boxW -and $m.Height -le $boxH) { break }
+    [Windows.Forms.TextRenderer]::DrawText($pg, $text, $probeFont, (New-Object Drawing.Point(20, 20)), [Drawing.Color]::White, $flags)
+    $pg.Dispose()
+
+    $minX = $probeSize; $minY = $probeSize; $maxX = -1; $maxY = -1
+    $data = $probe.LockBits((New-Object Drawing.Rectangle(0, 0, $probeSize, $probeSize)),
+        [Drawing.Imaging.ImageLockMode]::ReadOnly, [Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    try {
+        $row = New-Object byte[] ($probeSize * 4)
+        for ($yy = 0; $yy -lt $probeSize; $yy++) {
+            [Runtime.InteropServices.Marshal]::Copy([IntPtr]($data.Scan0.ToInt64() + $yy * $data.Stride), $row, 0, $row.Length)
+            for ($xx = 0; $xx -lt $probeSize; $xx++) {
+                if ($row[$xx * 4 + 3] -gt 24) {
+                    if ($xx -lt $minX) { $minX = $xx }
+                    if ($xx -gt $maxX) { $maxX = $xx }
+                    if ($yy -lt $minY) { $minY = $yy }
+                    if ($yy -gt $maxY) { $maxY = $yy }
+                }
+            }
+        }
+    } finally { $probe.UnlockBits($data) }
+
+    if ($maxX -ge $minX -and $maxY -ge $minY) {
+        $inkW = $maxX - $minX + 1
+        $inkH = $maxY - $minY + 1
+        $scale = [Math]::Min($boxW / $inkW, $boxH / $inkH)
+        $drawPx = ($probeSize * 0.5) * $scale
+        $f = New-Object Drawing.Font($FontFamily, $drawPx, [Drawing.FontStyle]::Bold, [Drawing.GraphicsUnit]::Pixel)
+        # Where the ink sat relative to the draw origin, scaled to this size.
+        $offX = (20 - $minX) * $scale
+        $offY = (20 - $minY) * $scale
+        $x = ($size - $inkW * $scale) / 2.0 + $offX
+        $y = ($size - $inkH * $scale) / 2.0 + $offY
+        $g.TextRenderingHint = [Drawing.Text.TextRenderingHint]::AntiAliasGridFit
+        [Windows.Forms.TextRenderer]::DrawText($g, $text, $f, (New-Object Drawing.Point([int][Math]::Round($x), [int][Math]::Round($y))), $InkColor, $flags)
         $f.Dispose()
-        $pt = $pt * 0.92
     }
-    $m = [Windows.Forms.TextRenderer]::MeasureText($g, $text, $f, (New-Object Drawing.Size(1000, 1000)), $flags)
-    $x = [int][Math]::Round(($size - $m.Width) / 2.0)
-    $y = [int][Math]::Round(($size - $m.Height) / 2.0)
-    [Windows.Forms.TextRenderer]::DrawText($g, $text, $f, (New-Object Drawing.Point($x, $y)), $InkColor, $flags)
-    $f.Dispose()
+    $probeFont.Dispose(); $probe.Dispose()
     $g.Dispose()
     return $bmp
 }

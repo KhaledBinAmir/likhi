@@ -28,12 +28,31 @@ use windows_numerics::Vector2;
 use crate::log;
 
 const CLASS_NAME: PCWSTR = w!("LikhiCandidateWindow");
-const FONT_FAMILY: PCWSTR = w!("Nirmala UI");
+
+/// Faces to use, best first; the first one installed wins.
+///
+/// Google Sans does cover Bengali (U+0980-09FE) and is the nicest of these, but it is not in
+/// Google's open-licensed font repository, so we may use it where someone already has it and may
+/// not ship it. Noto Sans Bengali is under the SIL Open Font License, is drawn for screens, and is
+/// what the installer puts on the machine. Nirmala UI is Windows' own Bengali face and is always
+/// present, which is what makes it the last resort.
+///
+/// DirectWrite silently substitutes something arbitrary for a family it cannot find, so the choice
+/// is made here against the system font collection and logged, rather than left to chance.
+const FONT_CHAIN: &[PCWSTR] = &[
+    w!("Google Sans"),
+    w!("Noto Sans Bengali"),
+    w!("Nirmala UI"),
+];
 /// Text size in device-independent pixels at 96 dpi; scaled by the monitor's DPI at draw time.
 const FONT_DIP: f32 = 14.0;
-const PAD_X: f32 = 10.0;
-const PAD_Y: f32 = 7.0;
-const GAP: f32 = 16.0;
+const PAD_X: f32 = 12.0;
+const PAD_Y: f32 = 8.0;
+/// Between one candidate and the next.
+const GAP: f32 = 18.0;
+/// Between a candidate's number and its word. Without it the digit crowds the Bangla and the pair
+/// reads as one token: "1আমার" rather than "1  আমার".
+const NUMBER_GAP: f32 = 5.0;
 const RADIUS: f32 = 6.0;
 /// Space between the composition's bottom edge and the window.
 const OFFSET_Y: i32 = 4;
@@ -230,8 +249,13 @@ impl Drop for CandidateWindow {
     }
 }
 
+/// Measured as one string so the number and the word are spaced by the same metrics that draw them.
 fn label(index: usize, candidate: &str) -> String {
-    format!("{} {}", index + 1, candidate)
+    format!("{}  {}", index + 1, candidate)
+}
+
+fn number_label(index: usize) -> String {
+    format!("{}", index + 1)
 }
 
 // The window's user data holds a pointer, and Win32 spells that differently per architecture:
@@ -255,6 +279,33 @@ unsafe fn get_user_data(hwnd: HWND) -> isize {
 #[cfg(target_pointer_width = "32")]
 unsafe fn get_user_data(hwnd: HWND) -> isize {
     GetWindowLongW(hwnd, GWLP_USERDATA) as isize
+}
+
+/// Whether a font family is actually installed, asked of the system collection. `CreateTextFormat`
+/// succeeds for a family that does not exist and substitutes at draw time, so this is the only way
+/// to know which face will really be used.
+fn family_available(dwrite: &IDWriteFactory, family: PCWSTR) -> bool {
+    unsafe {
+        let mut collection: Option<IDWriteFontCollection> = None;
+        if dwrite
+            .GetSystemFontCollection(&mut collection, true)
+            .is_err()
+        {
+            return false;
+        }
+        let Some(collection) = collection else {
+            return false;
+        };
+        let mut index = 0u32;
+        let mut exists = BOOL(0);
+        if collection
+            .FindFamilyName(family, &mut index, &mut exists)
+            .is_err()
+        {
+            return false;
+        }
+        exists.as_bool()
+    }
 }
 
 fn text_metrics(dwrite: &IDWriteFactory, format: &IDWriteTextFormat, text: &str) -> Option<DWRITE_TEXT_METRICS> {
@@ -302,9 +353,15 @@ impl Inner {
         }
         unsafe {
             let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).ok()?;
+            let family = FONT_CHAIN
+                .iter()
+                .copied()
+                .find(|f| family_available(&dwrite, *f))
+                .unwrap_or(FONT_CHAIN[FONT_CHAIN.len() - 1]);
+            log!("candidate window font: {}", family.display());
             let format = dwrite
                 .CreateTextFormat(
-                    FONT_FAMILY,
+                    family,
                     None,
                     DWRITE_FONT_WEIGHT_NORMAL,
                     DWRITE_FONT_STYLE_NORMAL,
@@ -413,7 +470,7 @@ impl Inner {
                     target.FillRoundedRectangle(&pill, &highlight);
                 }
                 // Number in a quieter colour, then the word: two layouts so they can differ.
-                let num = format!("{} ", i + 1);
+                let num = number_label(i);
                 if let Some(nm) = text_metrics(&dwrite, &format, &num) {
                     let wide: Vec<u16> = num.encode_utf16().collect();
                     if let Ok(layout) = dwrite.CreateTextLayout(&wide, &format, 4096.0, height_dip) {
@@ -427,7 +484,7 @@ impl Inner {
                     let wide: Vec<u16> = c.encode_utf16().collect();
                     if let Ok(layout) = dwrite.CreateTextLayout(&wide, &format, 4096.0, height_dip) {
                         target.DrawTextLayout(
-                            Vector2 { X: x + nm.width, Y: 0.0 },
+                            Vector2 { X: x + nm.width + NUMBER_GAP, Y: 0.0 },
                             &layout,
                             if selected { &highlight_text } else { &text },
                             D2D1_DRAW_TEXT_OPTIONS_NONE,
