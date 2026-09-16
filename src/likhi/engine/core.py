@@ -76,6 +76,12 @@ DEFAULT_WEIGHTS = {
 
 UNKNOWN_CONFIDENT_LOGP = -11.0  # log-prior given to an unknown word the model is sure about
 
+# How well attested a spelling must be before the fast path stops trusting candidates that agree
+# with nothing about the typed string. Chosen by measurement: at 5 the misaligned pairs that were
+# reaching the visible list disappear, top-1 is unchanged on every set, and top-5 moves by -0.02 on
+# Dakshina and -0.35 on the chat set.
+FAST_TRUST_ROM_EXACT = 5
+
 # Bengali spellings of English letter names. The transliteration model reads vowel-less shorthand
 # such as "amr" or "tmi" as an acronym (এএমআর, টিএমআই) with high confidence; those readings must
 # not enjoy the confident-unknown-word relief, otherwise they beat আমার / তুমি.
@@ -107,6 +113,24 @@ _LETTER_NAMES = (
     "আই",
     "এ",
 )
+
+
+def _fast_supported(ft: "Feats") -> bool:
+    """True when something other than a lone attested pair vouches for this candidate.
+
+    Any phonetic agreement counts, exact or as a prefix, as does Avro's rule-based reading and a
+    romanization seen more than once. What fails this test is a candidate whose entire case is one
+    row of aligned training data -- the part of that data most likely to be a misalignment.
+    """
+    return bool(
+        ft.key_fine
+        or ft.key_coarse
+        or ft.key_fine_prefix
+        or ft.key_coarse_prefix
+        or ft.avro
+        or ft.rom_prefix
+        or ft.rom_exact >= 2
+    )
 
 
 def looks_like_acronym(word: str) -> bool:
@@ -523,6 +547,15 @@ class LikhiEngine:
         The flag is True when some candidate is an attested spelling of the typed string (count
         >= 2). Phonetic-key matches alone are not enough: "khacche" key-matches কিছু/কাছে, which
         would be shown while the model's খাচ্ছে is still computing.
+
+        Candidates that agree with nothing about the typed string are pushed behind those that do.
+        The aligned romanization data contains a tail of misaligned pairs, and one of those plus a
+        high unigram count is enough to reach the visible list with no model to contradict it: "কোন"
+        and "হিসেবে" for bangla, "খনির" for sonar, each attested exactly once and matching neither
+        phonetic key. That list is selectable, so a user pressing 4 committed a word they never
+        typed. Only applied when something is well attested for this exact spelling, because when
+        the best evidence is a single occurrence that candidate may be all there is, and demoted
+        rather than removed so they still fill slots nothing better is competing for.
         """
         r = normalize_roman(roman)
         prev = (canonical(context[-1]),) if context else ()
@@ -530,9 +563,17 @@ class LikhiEngine:
         if not feats:
             return [], False
         w = self.w["rom_exact_fast"]
+
+        def base(word: str, ft: Feats) -> float:
+            return self.score(word, ft, r, prev) + w * math.log1p(ft.rom_exact)
+
+        demote = max(ft.rom_exact for ft in feats.values()) >= FAST_TRUST_ROM_EXACT
         ranked = sorted(
             feats.items(),
-            key=lambda kv: -(self.score(kv[0], kv[1], r, prev) + w * math.log1p(kv[1].rom_exact)),
+            key=lambda kv: (
+                (0 if not demote or _fast_supported(kv[1]) else 1),
+                -base(kv[0], kv[1]),
+            ),
         )
         strong = any(ft.rom_exact >= 2 for ft in feats.values())
         return [to_output(word) for word, _ in ranked[:k]], strong
