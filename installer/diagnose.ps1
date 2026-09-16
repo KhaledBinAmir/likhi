@@ -15,14 +15,24 @@ $clsid = '{35F67E9D-A54D-4177-9697-8B0AB71A9E04}'
 $profileGuid = '{9B4E7C21-3D5A-4F86-A2E1-6C0D8B7F5A13}'
 $tip = "0845:$clsid$profileGuid"
 
-# Desktop, then Documents, then TEMP: the first location the tester can actually find.
+# The Desktop, so a tester finds it without being told what LOCALAPPDATA is.
+#
+# Not the install directory: that is under Program Files, which a standard user cannot write to.
+# PowerShell's manifest disables UAC file virtualization, so such a write fails outright rather than
+# being silently redirected, and this script is meant to run without admin.
+$dataDir = Join-Path $(if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:USERPROFILE }) 'Likhi'
 $reportName = "Likhi-diagnostics-$env:COMPUTERNAME-$(Get-Date -Format yyyyMMdd-HHmmss).txt"
 $report = $null
 foreach ($dir in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('MyDocuments'), $env:TEMP)) {
-    if ($dir -and (Test-Path $dir)) { $report = Join-Path $dir $reportName; break }
+    if (-not $dir) { continue }
+    try {
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
+        $report = Join-Path $dir $reportName
+        break
+    } catch { }
 }
 $transcribing = $false
-try { Start-Transcript -Path $report -Force | Out-Null; $transcribing = $true } catch { }
+try { Start-Transcript -Path $report -Force -ErrorAction Stop | Out-Null; $transcribing = $true } catch { }
 
 function Section($name) { Write-Host "`n== $name" }
 
@@ -96,6 +106,20 @@ try {
     $c.Close()
 } catch { Write-Host "  engine NOT responding on 127.0.0.1:47123" }
 
+# Inlined rather than left as a second file to ask for: when the engine fails to start, the reason
+# is the last few lines of server.err and nothing in the registry says anything about it.
+foreach ($name in 'server.err', 'server.log') {
+    $p = Join-Path $dataDir $name
+    if (Test-Path $p) {
+        $size = (Get-Item $p).Length
+        Write-Host "  --- $name ($size bytes, last 20 lines)"
+        Get-Content $p -Tail 20 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "      $_" }
+    } else { Write-Host "  --- $name absent" }
+}
+$idFile = Join-Path $dataDir 'install_id'
+if (Test-Path $idFile) { Write-Host "  install id: $((Get-Content $idFile -Raw).Trim())" }
+else { Write-Host "  install id: none (the engine has never run for this user)" }
+
 Section "7. Autostart"
 $run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 foreach ($n in 'LikhiLauncher', 'LikhiEngine') {
@@ -127,10 +151,17 @@ else { Write-Host "  no Inno Setup logs in $env:TEMP (they are written under the
 
 if ($transcribing) {
     try { Stop-Transcript | Out-Null } catch { }
+    # Keep the three most recent. This lands on someone's Desktop, so leaving a growing pile of
+    # reports there is a good way to have the tool resented.
+    try {
+        Get-ChildItem (Split-Path $report) -Filter 'Likhi-diagnostics-*.txt' -ErrorAction Stop |
+            Sort-Object LastWriteTime -Descending | Select-Object -Skip 3 |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+    } catch { }
     Write-Host ""
     Write-Host "Saved to: $report"
     Write-Host "Send that file back."
-    # Select it in Explorer so the tester does not have to go looking.
+    # Open the folder with the report selected, so nobody has to know where LOCALAPPDATA is.
     try { Start-Process explorer.exe "/select,`"$report`"" } catch { }
 } else {
     Write-Host "`nCould not write a file; copy everything above and send it back."
