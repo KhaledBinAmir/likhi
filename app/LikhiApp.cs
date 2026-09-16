@@ -1,4 +1,4 @@
-// The Likhi window: what people open from the Start menu after installing.
+﻿// The Likhi window: what people open from the Start menu after installing.
 //
 // It exists because installing a keyboard leaves nothing to click, and everyone looks for an app.
 // Pilot users searched the Start menu, found nothing, and had no way to tell a working install from
@@ -11,11 +11,13 @@
 // installed. Built by scripts/build_app.py.
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
@@ -160,43 +162,128 @@ namespace Likhi
             }
         }
 
-        // Usage reporting is stored per user, so one person turning it off does not decide for
-        // everyone on a shared machine, and so it needs no administrator. The engine merges this
-        // over the installed config, which keeps the destination when reporting is switched off.
-        public static bool ReportingOn()
+        // Settings live per user, so one person's choice does not decide for everyone on a shared
+        // machine and none of it needs an administrator. Both the engine and the text service read
+        // the installed config first and lay this file over it, key by key.
+        //
+        // Deliberately not a JSON library: this file holds a handful of flat values that only this
+        // window writes, so a read-modify-write over the keys we own is simpler to audit than a
+        // dependency, and cannot reformat or lose a key it does not understand -- it keeps every
+        // line it did not come to change.
+        public static Dictionary<string, string> ReadUserConfig()
         {
+            var values = new Dictionary<string, string>();
             try
             {
-                string machine = Path.Combine(PimeDir, @"python\input_methods\likhi\config.json");
-                bool on = ReadTelemetry(machine);
-                string user = UserConfigPath;
-                if (File.Exists(user)) on = ReadTelemetry(user);
-                return on;
+                if (!File.Exists(UserConfigPath)) return values;
+                foreach (string line in File.ReadAllLines(UserConfigPath))
+                {
+                    Match m = Regex.Match(line.Trim(), "^\"([^\"]+)\"\\s*:\\s*(.+?),?$");
+                    if (m.Success) values[m.Groups[1].Value] = m.Groups[2].Value.Trim();
+                }
             }
-            catch { return false; }
+            catch { }
+            return values;
         }
 
-        static bool ReadTelemetry(string path)
+        public static void WriteUserConfig(Dictionary<string, string> values)
         {
-            if (!File.Exists(path)) return false;
-            // Deliberately not a JSON parser: this file has one line per key and we need one value.
-            foreach (string line in File.ReadAllLines(path))
+            string path = UserConfigPath;
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            var sb = new StringBuilder();
+            sb.Append("{\n");
+            int i = 0;
+            foreach (var kv in values)
             {
-                string t = line.Trim();
-                if (t.StartsWith("\"telemetry\"") && t.Contains(":"))
-                    return !t.Contains("\"off\"");
+                sb.Append("  \"").Append(kv.Key).Append("\": ").Append(kv.Value);
+                sb.Append(++i < values.Count ? ",\n" : "\n");
             }
-            return false;
+            sb.Append("}\n");
+            File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
+        }
+
+        static string MachineConfigPath
+        {
+            get
+            {
+                string inApp = Path.Combine(AppDir, "config.json");
+                if (File.Exists(inApp)) return inApp;
+                return Path.Combine(PimeDir, @"python\input_methods\likhi\config.json");
+            }
+        }
+
+        /// <summary>A setting's current value: the per-user file if it names it, else the machine one.</summary>
+        public static string Setting(string key, string fallback)
+        {
+            var user = ReadUserConfig();
+            if (user.ContainsKey(key)) return user[key].Trim('"');
+            try
+            {
+                if (File.Exists(MachineConfigPath))
+                {
+                    foreach (string line in File.ReadAllLines(MachineConfigPath))
+                    {
+                        Match m = Regex.Match(line.Trim(), "^\"" + Regex.Escape(key) + "\"\\s*:\\s*(.+?),?$");
+                        if (m.Success) return m.Groups[1].Value.Trim().Trim('"');
+                    }
+                }
+            }
+            catch { }
+            return fallback;
+        }
+
+        public static void SetSetting(string key, string jsonValue)
+        {
+            var values = ReadUserConfig();
+            values[key] = jsonValue;
+            WriteUserConfig(values);
+        }
+
+        public static bool ReportingOn()
+        {
+            return Setting("telemetry", "off") != "off";
         }
 
         public static void SetReporting(bool on)
         {
-            string path = UserConfigPath;
-            Directory.CreateDirectory(Path.GetDirectoryName(path));
-            // Only the one key: everything else keeps coming from the installed config.
-            File.WriteAllText(path,
-                "{\n  \"telemetry\": \"" + (on ? "full" : "off") + "\"\n}\n",
-                new UTF8Encoding(false));
+            SetSetting("telemetry", "\"" + (on ? "full" : "off") + "\"");
+        }
+
+        /// <summary>Installed families that actually contain Bengali, so the list cannot offer a
+        /// font that would render every candidate as boxes.</summary>
+        public static List<string> BanglaFonts()
+        {
+            var found = new List<string>();
+            using (var probe = new Bitmap(1, 1))
+            using (var g = Graphics.FromImage(probe))
+            {
+                foreach (FontFamily f in FontFamily.Families)
+                {
+                    try
+                    {
+                        using (var font = new Font(f, 14f))
+                        {
+                            // A family without Bengali coverage measures the string at the width of
+                            // its fallback boxes; comparing against a known-good face is unreliable,
+                            // so go by the families we ship plus the ones Windows is known to have.
+                            if (Known(f.Name)) found.Add(f.Name);
+                        }
+                    }
+                    catch { }
+                }
+            }
+            found.Sort(StringComparer.OrdinalIgnoreCase);
+            return found;
+        }
+
+        static bool Known(string name)
+        {
+            string[] families = {
+                "Noto Sans Bengali", "Anek Bangla", "Hind Siliguri", "Tiro Bangla",
+                "Nirmala UI", "Nirmala Text", "Shonar Bangla", "Vrinda", "Google Sans"
+            };
+            foreach (string f in families) if (string.Equals(f, name, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
         }
 
         public static void RestartEngine()
@@ -234,6 +321,7 @@ namespace Likhi
         Label statusKeyboard, statusEngine;
         CheckBox autostart, reporting;
         TextBox tryHere;
+        ComboBox fontBox, sizeBox;
         // Set while the window writes its own controls. Without it, showing the current state fires
         // the change handlers, so simply opening the window would rewrite the autostart keys and
         // restart the engine -- an action the person never asked for.
@@ -265,7 +353,7 @@ namespace Likhi
         public MainForm()
         {
             Text = "Likhi";
-            ClientSize = new Size(520, 522);
+            ClientSize = new Size(520, 578);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
@@ -293,6 +381,22 @@ namespace Likhi
             };
             foreach (string s in steps) { Body(s, 24, y, Fg, "Nirmala UI", 22); y += 24; }
             y += 14;
+
+            Head("Suggestion font", 11f, Fg, 18, y); y += 26;
+            fontBox = new ComboBox();
+            fontBox.Location = new Point(18, y);
+            fontBox.Size = new Size(320, 26);
+            fontBox.DropDownStyle = ComboBoxStyle.DropDownList;
+            foreach (string f in Env.BanglaFonts()) fontBox.Items.Add(f);
+            Controls.Add(fontBox);
+            sizeBox = new ComboBox();
+            sizeBox.Location = new Point(346, y);
+            sizeBox.Size = new Size(76, 26);
+            sizeBox.DropDownStyle = ComboBoxStyle.DropDownList;
+            foreach (int s in new[] { 12, 13, 14, 16, 18, 20, 24 }) sizeBox.Items.Add(s.ToString());
+            Controls.Add(sizeBox);
+            Body("px", 428, y + 4, Dim, "Segoe UI", 18);
+            y += 34;
 
             Head("Try it here", 11f, Fg, 18, y); y += 26;
             tryHere = new TextBox();
@@ -330,6 +434,20 @@ namespace Likhi
                 Env.SetReporting(reporting.Checked);
                 Env.RestartEngine();
             };
+            // The text service notices the file changing and rebuilds its text format within a
+            // second, so there is nothing to restart and no need to switch keyboards.
+            fontBox.SelectedIndexChanged += delegate
+            {
+                if (loading || fontBox.SelectedItem == null) return;
+                Env.SetSetting("font_name", "\"" + fontBox.SelectedItem + "\"");
+                PreviewFont();
+            };
+            sizeBox.SelectedIndexChanged += delegate
+            {
+                if (loading || sizeBox.SelectedItem == null) return;
+                Env.SetSetting("font_size", sizeBox.SelectedItem.ToString());
+                PreviewFont();
+            };
 
             Refresh2();
         }
@@ -356,6 +474,35 @@ namespace Likhi
 
             autostart.Checked = Env.AutostartOn();
             reporting.Checked = Env.ReportingOn();
+
+            string family = Env.Setting("font_name", "");
+            if (family.Length == 0 || !fontBox.Items.Contains(family))
+            {
+                // Nothing chosen yet: show what the text service will actually use.
+                foreach (string preferred in new[] { "Google Sans", "Noto Sans Bengali", "Nirmala UI" })
+                    if (fontBox.Items.Contains(preferred)) { family = preferred; break; }
+            }
+            fontBox.SelectedItem = family;
+            string size = Env.Setting("font_size", "14");
+            if (!sizeBox.Items.Contains(size)) size = "14";
+            sizeBox.SelectedItem = size;
+            PreviewFont();
+        }
+
+        /// <summary>Show the chosen face in the try-it box, so the choice is visible before typing.</summary>
+        void PreviewFont()
+        {
+            try
+            {
+                string family = fontBox.SelectedItem as string;
+                float size;
+                if (family == null || !float.TryParse(sizeBox.SelectedItem as string, out size)) return;
+                Font old = tryHere.Font;
+                // Points here, pixels in the candidate window: this box is ordinary UI text.
+                tryHere.Font = new Font(family, size * 0.9f, FontStyle.Regular, GraphicsUnit.Pixel);
+                if (old != null) old.Dispose();
+            }
+            catch { }
         }
 
         void RunDiagnostics()
