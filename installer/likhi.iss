@@ -8,6 +8,12 @@
 ; rights once and leaves the user with a working Bangla keyboard and nothing to configure.
 
 #define AppName "Likhi"
+; 0.2.2: nothing chosen in the Likhi window was ever saved. Refresh2 saves and restores the
+;        "loading" guard around its work, and during construction the saved value was true, so
+;        clearing the guard inside it left the restore to put true straight back: the flag never
+;        cleared and every handler returned early. Cleared at the end of the constructor instead.
+;        The shipped config also still named Nirmala UI as the candidate font, which overrode the
+;        preference chain on every machine; it names Noto Sans Bengali, which we now install.
 ; 0.2.1: the Likhi window checked the old text service's identity, so it reported the keyboard as
 ;        missing on a working install; it also wrote a font nobody had chosen, because filling a
 ;        drop-down raises the same event a click does. Choosing a candidate with an arrow key or a
@@ -93,7 +99,7 @@
 ;        running engine with PowerShell rather than WMIC, which Windows 11 no longer ships.
 ; 0.1.1: the engine did not look for the shell's config.json in the installed layout, so a fresh
 ;        install never reported telemetry.
-#define AppVersion "0.2.1"
+#define AppVersion "0.2.2"
 #define AppPublisher "Khaled Bin Amir"
 #define AppURL "https://github.com/KhaledBinAmir/likhi"
 #define PimeSource "C:\Program Files (x86)\PIME"
