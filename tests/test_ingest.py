@@ -27,6 +27,9 @@ def _free_port() -> int:
     return port
 
 
+ADMIN_KEY = "test-admin"
+
+
 @pytest.fixture
 def ingest(tmp_path):
     data = tmp_path / "server-data"
@@ -39,6 +42,8 @@ def ingest(tmp_path):
             str(data),
             "--key",
             KEY,
+            "--admin-key",
+            ADMIN_KEY,
             "--port",
             str(port),
             "--host",
@@ -147,6 +152,73 @@ def test_health_paths(ingest):
     with pytest.raises(urllib.error.HTTPError) as e:
         urllib.request.urlopen(url + "/", timeout=5)
     assert e.value.code == 404
+
+
+def _export(url, admin=ADMIN_KEY, query=""):
+    req = urllib.request.Request(url + "/v1/export" + query, headers={"X-Likhi-Admin-Key": admin})
+    return urllib.request.urlopen(req, timeout=10)
+
+
+def test_export_needs_the_admin_key_not_the_ingest_key(ingest):
+    url, _ = ingest
+    _post(url)
+    for bad in (KEY, "", "guess"):
+        with pytest.raises(urllib.error.HTTPError) as e:
+            _export(url, admin=bad)
+        assert e.value.code == 401
+
+
+def test_export_returns_every_line_tagged_with_its_install(ingest):
+    url, _ = ingest
+    _post(url, body=b'{"h":"2026-09-16T10","roman":"amr"}\n', **{"X-Likhi-Install": "aaaa1111bbbb"})
+    _post(url, body=b'{"h":"2026-09-16T11","roman":"tmi"}\n', **{"X-Likhi-Install": "cccc2222dddd"})
+    rows = [json.loads(x) for x in _export(url).read().decode("utf-8").splitlines()]
+    assert {r["_install"] for r in rows} == {"aaaa1111bbbb", "cccc2222dddd"}
+    assert {r["roman"] for r in rows} == {"amr", "tmi"}
+
+
+def test_export_since_filters_by_hour(ingest):
+    url, _ = ingest
+    _post(url, body=b'{"h":"2026-09-16T10","roman":"old"}\n{"h":"2026-09-16T20","roman":"new"}\n')
+    rows = [
+        json.loads(x)
+        for x in _export(url, query="?since=2026-09-16T15").read().decode().splitlines()
+    ]
+    assert [r["roman"] for r in rows] == ["new"]
+
+
+def test_export_is_disabled_without_an_admin_key(tmp_path):
+    port = _free_port()
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            str(SERVER),
+            "--data",
+            str(tmp_path / "d"),
+            "--key",
+            KEY,
+            "--port",
+            str(port),
+            "--host",
+            "127.0.0.1",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    url = f"http://127.0.0.1:{port}"
+    try:
+        for _ in range(100):
+            try:
+                urllib.request.urlopen(url + "/v1/health", timeout=1)
+                break
+            except Exception:
+                time.sleep(0.1)
+        with pytest.raises(urllib.error.HTTPError) as e:
+            _export(url)
+        assert e.value.code == 404
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
 
 
 def test_duplicate_chunk_is_accepted_once(ingest):
