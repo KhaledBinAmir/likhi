@@ -14,16 +14,16 @@ param(
     # application -- the opposite of what anyone expects from a second keyboard. A Bangla keyboard
     # should be there when you reach for it, not in the way when you do not.
     [switch]$MakeLikhiDefault,
-    [string]$InstallDir = (Split-Path -Parent $PSCommandPath),
-    # PIME lives here and nowhere else: PIMETextService.dll builds this path internally when it
-    # registers its input methods, ignoring both its own location and HKLM\SOFTWARE\PIME.
-    [string]$PimeDir = (Join-Path ${env:ProgramFiles(x86)} 'PIME')
+    [string]$InstallDir = (Split-Path -Parent $PSCommandPath)
 )
 
 $ErrorActionPreference = 'Stop'
 
-# PIME's text service CLSID, and the language profile declared in windows/pime/likhi/ime.json.
-$tip = '0845:{35F67E9D-A54D-4177-9697-8B0AB71A9E04}{9B4E7C21-3D5A-4F86-A2E1-6C0D8B7F5A13}'
+# Our text service CLSID and language profile, from shell/src/guids.rs.
+$tip = '0845:{1D24C804-FAD0-4B32-AEDD-1317F4E6221E}{502AB3FE-5B7C-43E9-89D1-BE885846AE0D}'
+# The PIME-based service shipped up to 0.1.12. Removed from the language list on upgrade so nobody
+# is left with two Bangla keyboards, one of which has no files behind it any more.
+$oldTip = '0845:{35F67E9D-A54D-4177-9697-8B0AB71A9E04}{9B4E7C21-3D5A-4F86-A2E1-6C0D8B7F5A13}'
 
 $list = Get-WinUserLanguageList
 $bn = $list | Where-Object { $_.LanguageTag -eq 'bn-BD' }
@@ -39,6 +39,8 @@ if ($bn.InputMethodTips -notcontains $tip) {
     Write-Host "the Likhi keyboard was already present"
 }
 
+# Everything else goes: the previous PIME-based keyboard, and Bengali INSCRIPT.
+#
 # Adding bn-BD makes Windows attach that language's default physical layout as well, Bengali
 # INSCRIPT (0845:00000445). It then sits next to Likhi in Win+Space, and INSCRIPT maps QWERTY keys
 # straight onto Bangla letters, so anyone who lands on it types what looks like gibberish and
@@ -74,18 +76,20 @@ if ($MakeLikhiDefault) {
 # Start at sign-in, per user. Each person gets their own engine process and therefore their own
 # learning data; a machine-wide entry would share one engine, and one person's personal
 # dictionary, between everyone signed in.
+#
+# One entry now, not two: the text service is a DLL that Windows loads into each application by
+# itself, so there is no launcher process to start any more. Any LikhiLauncher entry left by an
+# earlier version is removed, or it would try to run a program that is no longer installed.
 $run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-$launcher = Join-Path $PimeDir 'PIMELauncher.exe'
+Remove-ItemProperty -Path $run -Name 'LikhiLauncher' -ErrorAction SilentlyContinue
 $engine = Join-Path $InstallDir 'runtime\likhi-server.cmd'
-if (Test-Path $launcher) {
-    Set-ItemProperty -Path $run -Name 'LikhiLauncher' -Value """$launcher"""
+if (Test-Path $engine) {
     Set-ItemProperty -Path $run -Name 'LikhiEngine' -Value """$engine"""
     Write-Host "set Likhi to start when you sign in"
-    if (-not (Get-Process PIMELauncher -ErrorAction SilentlyContinue)) {
-        Start-Process -FilePath $launcher -WorkingDirectory (Split-Path $launcher)
-    }
     Start-Process -FilePath $engine -WorkingDirectory (Split-Path $engine) -WindowStyle Hidden
-    Write-Host "started the keyboard host and the engine"
+    Write-Host "started the suggestion engine"
+} else {
+    Write-Host "WARNING: engine not found at $engine"
 }
 
 Write-Host "DONE. Press Win+Space to switch keyboards."

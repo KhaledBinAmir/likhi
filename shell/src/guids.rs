@@ -31,7 +31,5 @@ pub const HKL_SUBSTITUTE_US: isize = 0x0409_0409;
 /// The name Windows shows in the keyboard picker.
 ///
 /// In Bangla, because this is a Bangla keyboard and the people choosing it read Bangla; the picker
-/// puts it beside the other Bangla entries, where an English label is the odd one out. The suffix
-/// marks the preview while the PIME shell is still installed alongside, and goes when it replaces
-/// it.
-pub const DESCRIPTION: &str = "লিখি — বাংলা ফোনেটিক (প্রিভিউ)";
+/// puts it beside the other Bangla entries, where an English label is the odd one out.
+pub const DESCRIPTION: &str = "লিখি — বাংলা ফোনেটিক";

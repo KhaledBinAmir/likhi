@@ -1,4 +1,4 @@
-﻿; Likhi installer. Build with:
+; Likhi installer. Build with:
 ;   python scripts/build_runtime.py
 ;   python scripts/build_client.py
 ;   python scripts/build_app.py
@@ -8,6 +8,16 @@
 ; rights once and leaves the user with a working Bangla keyboard and nothing to configure.
 
 #define AppName "Likhi"
+; 0.2.0: our own text service, in Rust, replacing PIME entirely. One DLL per architecture and the
+;        engine; no launcher, no second Python interpreter, no shared PIME directory. Every serious
+;        bug of the pilot came from that layer rather than from the engine -- registration reading a
+;        hardcoded path, a candidate window that could not be restyled, a backend pinned to Python
+;        3.8, and Explorer crashing inside PIMETextService.dll on a pilot machine.
+;        The candidate window is ours now: Direct2D and DirectWrite, follows the Windows theme,
+;        shapes Bengali correctly, and takes a font the person chooses. Four Bangla faces under the
+;        SIL Open Font License ship with it and are installed for every application, not just ours.
+;        An upgrade unregisters the old service and takes it out of the language list, so nobody is
+;        left with two Bangla keyboards -- the same trap the INSCRIPT layout set in 0.1.8.
 ; 0.1.12: a Start menu entry called simply "Likhi". Installing a keyboard leaves nothing to click,
 ;        and everyone looks for an app: pilot users searched the Start menu, found nothing, and had
 ;        no way to tell a working install from a broken one. The window says whether the keyboard
@@ -77,7 +87,7 @@
 ;        running engine with PowerShell rather than WMIC, which Windows 11 no longer ships.
 ; 0.1.1: the engine did not look for the shell's config.json in the installed layout, so a fresh
 ;        install never reported telemetry.
-#define AppVersion "0.1.12"
+#define AppVersion "0.2.0"
 #define AppPublisher "Khaled Bin Amir"
 #define AppURL "https://github.com/KhaledBinAmir/likhi"
 #define PimeSource "C:\Program Files (x86)\PIME"
@@ -124,33 +134,29 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Files]
 ; The engine: embedded Python, NumPy, the Likhi package, the model and the lexicon.
 Source: "..\dist\runtime\*"; DestDir: "{app}\runtime"; Flags: ignoreversion recursesubdirs createallsubdirs
-; PIME: the Text Services Framework host. Unmodified, LGPL-2.1, see THIRD-PARTY.md.
+; The text service. One DLL per architecture, because it is loaded into whichever process has
+; keyboard focus and a 32-bit application cannot load the 64-bit one.
 ;
-; Installed to {#PimeDir} rather than under {app}, because the DLL only ever looks there -- see the
-; note beside the PimeDir definition. Until 0.1.4 this went to {app}\pime, regsvr32 found no input
-; methods to register, no language profile was written, and the keyboard never appeared for anyone
-; who had not previously installed PIME by hand.
-;
-; Inno removes only the files it installed and only removes a directory once it is empty, so sharing
-; this directory with an existing standalone PIME installation is safe in both directions.
-Source: "{#PimeSource}\PIMELauncher.exe"; DestDir: "{#PimeDir}"; Flags: ignoreversion restartreplace
-Source: "{#PimeSource}\backends.json"; DestDir: "{#PimeDir}"; Flags: ignoreversion
-Source: "{#PimeSource}\version.txt"; DestDir: "{#PimeDir}"; Flags: ignoreversion
-; No ignoreversion here, unlike everything else we ship. These DLLs live inside every running
-; application that has had keyboard focus. Forcing an overwrite means the file is locked, Inno
-; schedules the replacement for the next boot, and Setup then tells the user to restart -- on every
-; single upgrade, to install a byte-identical file. Inno's normal version check skips them when they
-; already match, so an upgrade touches nothing that is in use and needs no restart, while a genuinely
-; newer PIME would still be installed. restartreplace remains as the fallback for the first install
-; on a machine that already had PIME running.
-Source: "{#PimeSource}\x64\*"; DestDir: "{#PimeDir}\x64"; Flags: recursesubdirs restartreplace uninsrestartdelete
-Source: "{#PimeSource}\x86\*"; DestDir: "{#PimeDir}\x86"; Flags: recursesubdirs restartreplace uninsrestartdelete
-; PIME's Python backend host, without the input methods we do not ship.
-Source: "{#PimeSource}\python\*"; DestDir: "{#PimeDir}\python"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "input_methods\*,__pycache__"
-Source: "{#PimeSource}\python\input_methods\*.py"; DestDir: "{#PimeDir}\python\input_methods"; Flags: ignoreversion skipifsourcedoesntexist
-; Our text service, with the pilot keys already stamped in by scripts/build_client.py.
-Source: "..\dist\likhi\*"; DestDir: "{#PimeDir}\python\input_methods\likhi"; Flags: ignoreversion
-; The window people open from the Start menu: status, how to switch, and the two settings that are
+; No ignoreversion: these live inside every running application that has had focus. Forcing an
+; overwrite locks the file, Inno schedules the replacement for the next boot, and Setup then asks
+; for a restart on every upgrade. Inno's version check skips them when they already match.
+; restartreplace remains as the fallback when a genuinely newer build cannot be written.
+Source: "..\dist\shell\x64\LikhiTextService.dll"; DestDir: "{app}\shell\x64"; Flags: restartreplace uninsrestartdelete
+Source: "..\dist\shell\x64\likhi.ico"; DestDir: "{app}\shell\x64"; Flags: ignoreversion
+Source: "..\dist\shell\x86\LikhiTextService.dll"; DestDir: "{app}\shell\x86"; Flags: restartreplace uninsrestartdelete
+Source: "..\dist\shell\x86\likhi.ico"; DestDir: "{app}\shell\x86"; Flags: ignoreversion
+; Settings, with the pilot keys already stamped in by scripts/build_client.py. Read by both the
+; engine and the text service; a per-user file in %LOCALAPPDATA%\Likhi overrides it key by key.
+Source: "..\dist\likhi\config.json"; DestDir: "{app}"; Flags: ignoreversion
+; Bangla faces for the candidate window, all under the SIL Open Font License. Installed properly so
+; every application can use them, not only ours. fontisnttruetype is absent on purpose: these are
+; TrueType, and Inno registers them and notifies running applications.
+Source: "..\assets\fonts\NotoSansBengali.ttf"; DestDir: "{autofonts}"; FontInstall: "Noto Sans Bengali"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "..\assets\fonts\AnekBangla.ttf"; DestDir: "{autofonts}"; FontInstall: "Anek Bangla"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "..\assets\fonts\HindSiliguri-Regular.ttf"; DestDir: "{autofonts}"; FontInstall: "Hind Siliguri"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "..\assets\fonts\TiroBangla-Regular.ttf"; DestDir: "{autofonts}"; FontInstall: "Tiro Bangla"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "..\assets\fonts\*-OFL.txt"; DestDir: "{app}\fonts"; Flags: ignoreversion
+; The window people open from the Start menu: status, how to switch, and the settings that are
 ; theirs to make. Needs no runtime of its own -- .NET Framework 4 is part of Windows.
 Source: "..\dist\Likhi.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; Per-user keyboard setup and documentation.
@@ -167,6 +173,10 @@ Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 ; remove and carries on, which is what we want -- deleting a mapped image is how you crash every
 ; program that has the keyboard loaded.
 Type: filesandordirs; Name: "{app}\pime"
+; 0.2.0 replaced PIME with our own text service. The files we put into the shared PIME directory go
+; with it; the directory itself is left alone, because a machine may have installed PIME for its own
+; reasons and Inno removes a directory only once it is empty.
+Type: filesandordirs; Name: "{#PimeDir}\python\input_methods\likhi"
 
 [Icons]
 ; First, and named just "Likhi", because that is what someone types into the Start menu when they
@@ -174,7 +184,7 @@ Type: filesandordirs; Name: "{app}\pime"
 Name: "{group}\Likhi"; Filename: "{app}\Likhi.exe"
 Name: "{group}\Likhi on GitHub"; Filename: "{#AppURL}"
 ; Any other user of this machine runs this once to get the keyboard and their own engine.
-Name: "{group}\Set up the Likhi keyboard for this user"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\enable_keyboard.ps1"" -InstallDir ""{app}"" -PimeDir ""{#PimeDir}"""
+Name: "{group}\Set up the Likhi keyboard for this user"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\enable_keyboard.ps1"" -InstallDir ""{app}"""
 Name: "{group}\Diagnose Likhi"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\diagnose.ps1"""
 Name: "{group}\Uninstall Likhi"; Filename: "{uninstallexe}"
 
@@ -182,7 +192,10 @@ Name: "{group}\Uninstall Likhi"; Filename: "{uninstallexe}"
 ; Autostart is per user and is written by enable_keyboard.ps1 under the account that will actually
 ; type, not here: an administrative install may run under a different account, and each user needs
 ; their own engine process so that personal learning data is never shared.
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "LikhiLauncher"; Flags: uninsdeletevalue dontcreatekey
+;
+; LikhiLauncher is listed only so an upgrade from a PIME build removes it: there is no launcher any
+; more, and a stale entry would start a program that is no longer installed at every sign-in.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "LikhiLauncher"; Flags: uninsdeletevalue deletevalue dontcreatekey
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "LikhiEngine"; Flags: uninsdeletevalue dontcreatekey
 
 ; Registration and keyboard setup happen in [Code] so their results can be checked and reported.
@@ -190,16 +203,11 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: 
 ; keyboard from the language list without an error, which is exactly how 0.1.1 failed quietly.
 
 [UninstallRun]
-; HKLM\SOFTWARE\PIME is deliberately left behind. It is PIME's own key, not ours; on a machine that
-; also has standalone PIME installed, deleting it would break that installation, and a value left
-; pointing at a removed directory is the milder of the two failures.
-;
 ; runasoriginaluser is a [Run]-only flag; the uninstaller already runs under the same user account,
 ; so HKCU (where the language list lives) is that user's hive.
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\disable_keyboard.ps1"""; Flags: waituntilterminated runhidden; RunOnceId: "RemoveKeyboard"
-Filename: "{sys}\taskkill.exe"; Parameters: "/f /im PIMELauncher.exe"; Flags: waituntilterminated runhidden; RunOnceId: "StopLauncher"
-Filename: "{sys}\regsvr32.exe"; Parameters: "/u /s ""{#PimeDir}\x64\PIMETextService.dll"""; Flags: waituntilterminated; RunOnceId: "UnregX64"
-Filename: "{syswow64}\regsvr32.exe"; Parameters: "/u /s ""{#PimeDir}\x86\PIMETextService.dll"""; Flags: waituntilterminated; RunOnceId: "UnregX86"
+Filename: "{sys}\regsvr32.exe"; Parameters: "/u /s ""{app}\shell\x64\LikhiTextService.dll"""; Flags: waituntilterminated; RunOnceId: "UnregX64"
+Filename: "{syswow64}\regsvr32.exe"; Parameters: "/u /s ""{app}\shell\x86\LikhiTextService.dll"""; Flags: waituntilterminated; RunOnceId: "UnregX86"
 
 [Code]
 const
@@ -210,9 +218,14 @@ const
     every user that registration had failed when it had in fact succeeded.
     A section name in square brackets must not start a line in here either: Inno strips leading
     whitespace before deciding whether a line opens a new section, comment or not. }
-  TipClsid = '{35F67E9D-A54D-4177-9697-8B0AB71A9E04}';
-  TipProfile = '{9B4E7C21-3D5A-4F86-A2E1-6C0D8B7F5A13}';
+  TipClsid = '{1D24C804-FAD0-4B32-AEDD-1317F4E6221E}';
+  TipProfile = '{502AB3FE-5B7C-43E9-89D1-BE885846AE0D}';
   LangId = '0x00000845';
+  { The PIME-based service that versions up to 0.1.12 installed. Kept here only so an upgrade can
+    unregister it and take its entry out of the keyboard picker: leaving it would give people two
+    Bangla keyboards, one of which no longer has any files behind it. }
+  OldClsid = '{35F67E9D-A54D-4177-9697-8B0AB71A9E04}';
+  OldProfile = '{9B4E7C21-3D5A-4F86-A2E1-6C0D8B7F5A13}';
 
 function RunHidden(const Exe, Params: String; var Code: Integer): Boolean;
 begin
@@ -240,20 +253,35 @@ begin
   Sleep(700);
 end;
 
+{ Take the old PIME keyboard out of the picker before installing ours.
+  Unregistered first, so the CLSID never points at files that are about to be deleted, and the
+  profile key is removed by hand as well: regsvr32 /u cannot run once the DLL is gone, and an
+  upgrade from a build whose files a previous uninstall already removed would otherwise leave a
+  dead keyboard listed for ever. }
+procedure RemoveOldTextService();
+var
+  Code: Integer;
+begin
+  if FileExists(ExpandConstant('{#PimeDir}\x64\PIMETextService.dll')) then
+  begin
+    RunHidden(ExpandConstant('{sys}\regsvr32.exe'),
+              '/u /s "' + ExpandConstant('{#PimeDir}\x64\PIMETextService.dll') + '"', Code);
+    RunHidden(ExpandConstant('{syswow64}\regsvr32.exe'),
+              '/u /s "' + ExpandConstant('{#PimeDir}\x86\PIMETextService.dll') + '"', Code);
+  end;
+  RegDeleteKeyIncludingSubkeys(HKLM64, 'SOFTWARE\Microsoft\CTF\TIP\' + OldClsid);
+  RegDeleteKeyIncludingSubkeys(HKLM32, 'SOFTWARE\Microsoft\CTF\TIP\' + OldClsid);
+end;
+
 function RegisterTextService(var Problem: String): Boolean;
 var
   Code64, Code32: Integer;
   Desc: String;
 begin
-  { PIMELauncher reads this to find its own files. The DLL does not -- it uses a path it builds
-    internally -- so writing this does not help registration, but leaving it wrong would break the
-    launcher on a machine that once had PIME somewhere else. }
-  RegWriteStringValue(HKLM, 'SOFTWARE\PIME', '', ExpandConstant('{#PimeDir}'));
-
   RunHidden(ExpandConstant('{sys}\regsvr32.exe'),
-            '/s "' + ExpandConstant('{#PimeDir}\x64\PIMETextService.dll') + '"', Code64);
+            '/s "' + ExpandConstant('{app}\shell\x64\LikhiTextService.dll') + '"', Code64);
   RunHidden(ExpandConstant('{syswow64}\regsvr32.exe'),
-            '/s "' + ExpandConstant('{#PimeDir}\x86\PIMETextService.dll') + '"', Code32);
+            '/s "' + ExpandConstant('{app}\shell\x86\LikhiTextService.dll') + '"', Code32);
   if (Code64 <> 0) or (Code32 <> 0) then
   begin
     Problem := 'Registering the text service failed (64-bit code ' + IntToStr(Code64) +
@@ -305,8 +333,7 @@ var
 begin
   ExecAsOriginalUser('powershell.exe',
     '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\enable_keyboard.ps1') +
-    '" -InstallDir "' + ExpandConstant('{app}') +
-    '" -PimeDir "' + ExpandConstant('{#PimeDir}') + '"',
+    '" -InstallDir "' + ExpandConstant('{app}') + '"',
     '', SW_HIDE, ewWaitUntilTerminated, Code);
   Sleep(500);
   Result := KeyboardPresentForUser();
@@ -324,10 +351,12 @@ var
   Code: Integer;
   Registered, HasKeyboard, Failed: Boolean;
 begin
-  { An upgrade must not leave the old engine holding its own files open. }
+  { An upgrade must not leave the old engine holding its own files open, and must take the PIME
+    keyboard out of the picker before its files are deleted underneath it. }
   if CurStep = ssInstall then
   begin
     StopOurProcesses();
+    RemoveOldTextService();
     { Releases the CLSID from the 0.1.4-and-earlier location before that copy is deleted, so the
       registration never points at a path that no longer exists. Harmless on a first install. }
     if FileExists(ExpandConstant('{app}\pime\x64\PIMETextService.dll')) then

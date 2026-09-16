@@ -11,9 +11,13 @@
   copy-paste a console window loses half the output and all of the formatting.
 #>
 
-$clsid = '{35F67E9D-A54D-4177-9697-8B0AB71A9E04}'
-$profileGuid = '{9B4E7C21-3D5A-4F86-A2E1-6C0D8B7F5A13}'
+$clsid = '{1D24C804-FAD0-4B32-AEDD-1317F4E6221E}'
+$profileGuid = '{502AB3FE-5B7C-43E9-89D1-BE885846AE0D}'
 $tip = "0845:$clsid$profileGuid"
+# The PIME-based service shipped up to 0.1.12. Reported when present, because a leftover is the
+# difference between one Bangla keyboard in the picker and two.
+$oldClsid = '{35F67E9D-A54D-4177-9697-8B0AB71A9E04}'
+$oldTip = "0845:$oldClsid{9B4E7C21-3D5A-4F86-A2E1-6C0D8B7F5A13}"
 
 # The Desktop, so a tester finds it without being told what LOCALAPPDATA is.
 #
@@ -40,24 +44,24 @@ Write-Host "Likhi diagnostics  $(Get-Date -Format s)"
 Write-Host "Windows $([Environment]::OSVersion.Version)  user=$env:USERNAME  admin=$(([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))"
 
 Section "1. Installed files"
-# PIME must be under Program Files (x86)\PIME: the text service DLL builds that path internally when
-# it registers its input methods, so an install anywhere else registers no keyboard at all.
-$roots = @("$env:ProgramFiles\Likhi", "${env:ProgramFiles(x86)}\Likhi", "${env:ProgramFiles(x86)}\PIME")
-foreach ($r in $roots) {
-    if (Test-Path $r) {
-        Write-Host "  FOUND $r"
-        foreach ($f in @("pime\x64\PIMETextService.dll", "pime\x86\PIMETextService.dll",
-                         "pime\PIMELauncher.exe", "pime\backends.json",
-                         "pime\python\input_methods\likhi\ime.json",
-                         "pime\python\input_methods\likhi\config.json",
-                         "runtime\likhi-server.cmd", "runtime\models\lexicon\unigrams.marisa",
-                         "x64\PIMETextService.dll", "x86\PIMETextService.dll", "PIMELauncher.exe",
-                         "python\input_methods\likhi\ime.json",
-                         "python\input_methods\likhi\config.json")) {
-            $p = Join-Path $r $f
-            if (Test-Path $p) { Write-Host "    ok      $f" }
-        }
-    } else { Write-Host "  absent $r" }
+$root = "$env:ProgramFiles\Likhi"
+if (Test-Path $root) {
+    Write-Host "  FOUND $root"
+    foreach ($f in @("shell\x64\LikhiTextService.dll", "shell\x86\LikhiTextService.dll",
+                     "shell\x64\likhi.ico", "config.json", "Likhi.exe",
+                     "runtime\likhi-server.cmd", "runtime\models\lexicon\unigrams.marisa")) {
+        $p = Join-Path $root $f
+        if (Test-Path $p) { Write-Host "    ok      $f" } else { Write-Host "    MISSING $f" }
+    }
+} else { Write-Host "  MISSING $root" }
+# A leftover PIME install is not an error -- someone may use it for another language -- but our
+# files inside it are, because they mean an upgrade did not finish cleaning up.
+$pime = "${env:ProgramFiles(x86)}\PIME"
+if (Test-Path $pime) {
+    Write-Host "  note: PIME present at $pime"
+    if (Test-Path (Join-Path $pime 'python\input_methods\likhi')) {
+        Write-Host "    LEFTOVER our old input method is still in there"
+    }
 }
 
 Section "2. COM registration (created by regsvr32)"
@@ -92,14 +96,24 @@ for ($i = 0; $i -lt $langs.Count; $i++) {
     if ($langs[$i].InputMethodTips -contains $tip) { $hasTip = $true }
 }
 Write-Host "  Likhi present for this user: $hasTip"
+$hasOld = $false
+for ($i = 0; $i -lt $langs.Count; $i++) { if ($langs[$i].InputMethodTips -contains $oldTip) { $hasOld = $true } }
+if ($hasOld) { Write-Host "  LEFTOVER the pre-0.2.0 keyboard is also listed; there will be two Bangla entries" }
 try { Write-Host "  default input method: $((Get-WinDefaultInputMethodOverride).InputMethodTip)" } catch {}
 
 Section "5. Processes"
-foreach ($n in 'PIMELauncher', 'pythonw', 'python') {
+# Only the engine now: the text service is a DLL Windows loads into each application itself, so
+# there is no launcher and no separate backend process to look for.
+foreach ($n in 'pythonw', 'python') {
     $procs = Get-Process $n -ErrorAction SilentlyContinue
     if ($procs) { $procs | ForEach-Object { Write-Host "  $n  pid=$($_.Id)  $($_.Path)" } }
     else { Write-Host "  $n not running" }
 }
+$loaded = @()
+Get-Process -ErrorAction SilentlyContinue | ForEach-Object {
+    try { if ($_.Modules | Where-Object { $_.ModuleName -eq 'LikhiTextService.dll' }) { $loaded += "$($_.ProcessName)($($_.Id))" } } catch {}
+}
+Write-Host "  text service loaded in: $(if ($loaded) { $loaded -join ', ' } else { 'no application yet' })"
 
 Section "6. Engine"
 try {
@@ -126,10 +140,10 @@ else { Write-Host "  install id: none (the engine has never run for this user)" 
 
 Section "7. Autostart"
 $run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-foreach ($n in 'LikhiLauncher', 'LikhiEngine') {
-    $v = (Get-ItemProperty $run -Name $n -ErrorAction SilentlyContinue).$n
-    if ($v) { Write-Host "  ok      $n = $v" } else { Write-Host "  MISSING $n" }
-}
+$v = (Get-ItemProperty $run -Name 'LikhiEngine' -ErrorAction SilentlyContinue).LikhiEngine
+if ($v) { Write-Host "  ok      LikhiEngine = $v" } else { Write-Host "  MISSING LikhiEngine" }
+$old = (Get-ItemProperty $run -Name 'LikhiLauncher' -ErrorAction SilentlyContinue).LikhiLauncher
+if ($old) { Write-Host "  LEFTOVER LikhiLauncher = $old  (there is no launcher any more)" }
 
 Section "8. Recent crashes involving text input"
 # A text service DLL runs inside every application that has keyboard focus, so a bad one shows up
