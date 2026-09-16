@@ -22,7 +22,7 @@ Put it behind a reverse proxy (Caddy, nginx, Cloudflare Tunnel) for a real certi
 
 Endpoints:
     POST /v1/ingest   body = newline-delimited JSON, headers X-Likhi-Install / -Stream / -Seq / -Key
-    GET  /healthz     liveness, no auth
+    GET  /v1/health   liveness, no auth (also /healthz when self-hosted; Cloud Run reserves that one)
 
 Safety properties that matter here:
   * the install id and stream name are validated against strict patterns before touching a path,
@@ -103,7 +103,10 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(payload)
 
     def do_GET(self) -> None:  # noqa: N802 (stdlib naming)
-        if self.path == "/healthz":
+        # /healthz is answered by Google's frontend on Cloud Run and never reaches the container
+        # (measured 2026-09-16: it returns a 1568-byte HTML 404 while every other path arrives
+        # here), so the real health path is namespaced. /healthz still works when self-hosted.
+        if self.path.split("?")[0] in ("/v1/health", "/healthz"):
             self._reply(200, '{"ok":true}')
         else:
             self._reply(404, '{"error":"not found"}')

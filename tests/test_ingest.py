@@ -50,7 +50,7 @@ def ingest(tmp_path):
     url = f"http://127.0.0.1:{port}"
     for _ in range(100):
         try:
-            with urllib.request.urlopen(url + "/healthz", timeout=1) as r:
+            with urllib.request.urlopen(url + "/v1/health", timeout=1) as r:
                 if r.status == 200:
                     break
         except Exception:
@@ -137,6 +137,16 @@ def test_non_json_body_is_rejected(ingest):
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(url, body=b"not json at all\n")
     assert e.value.code == 400
+
+
+def test_health_paths(ingest):
+    url, _ = ingest
+    for path in ("/v1/health", "/healthz"):
+        with urllib.request.urlopen(url + path, timeout=5) as r:
+            assert r.status == 200 and json.loads(r.read())["ok"] is True
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(url + "/", timeout=5)
+    assert e.value.code == 404
 
 
 def test_duplicate_chunk_is_accepted_once(ingest):
