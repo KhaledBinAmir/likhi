@@ -41,3 +41,7 @@ Thumbs.db
 .vscode/
 .idea/
 *.log
+
+# Rust build output for the text service
+shell/target/
+

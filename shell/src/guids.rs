@@ -1,0 +1,33 @@
+//! Identity of the Likhi text service.
+//!
+//! These are deliberately different from the GUIDs the PIME-based shell registers, so the two can be
+//! installed side by side while this one is being developed: Windows tells them apart by CLSID and
+//! profile, and neither registration disturbs the other.
+
+use windows::core::GUID;
+
+/// The COM class of the text service. This is what `regsvr32` registers and what TSF instantiates
+/// inside every application that switches to the Likhi keyboard.
+pub const CLSID_LIKHI: GUID = GUID::from_u128(0x1D24C804_FAD0_4B32_AEDD_1317F4E6221E);
+
+/// The language profile: one keyboard entry under Bangla (Bangladesh) in Win+Space.
+pub const GUID_PROFILE: GUID = GUID::from_u128(0x502AB3FE_5B7C_43E9_89D1_BE885846AE0D);
+
+/// Our display attribute (the underline on text being composed), registered in M2.
+#[allow(dead_code)]
+pub const GUID_DISPLAY_ATTRIBUTE: GUID = GUID::from_u128(0x0F003D71_BA44_40A2_9A62_699FEBE259FA);
+
+/// bn-BD.
+pub const LANGID_BN_BD: u16 = 0x0845;
+
+/// The keyboard layout this text service sits on: US English, 0x0409 layout for the 0x0409 language.
+///
+/// A text service sits on top of a physical layout, and Windows attaches Bengali INSCRIPT to bn-BD
+/// by default, which maps the letter keys straight onto Bangla letters. The PIME shell had to work
+/// around that by reading virtual key codes; here we declare the substitute layout at registration
+/// and the problem cannot arise: every key arrives as the Latin character a US keyboard would give.
+pub const HKL_SUBSTITUTE_US: isize = 0x0409_0409;
+
+/// Distinct from the PIME shell's "Likhi (Bangla phonetic)" while both are installed, so a tester
+/// can tell which one they switched to. Becomes the plain name when this shell replaces PIME.
+pub const DESCRIPTION: &str = "Likhi (new shell, preview)";
