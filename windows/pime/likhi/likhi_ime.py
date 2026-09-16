@@ -86,7 +86,9 @@ def _load_config():
         "font_size": 16,
     }
     try:
-        with open(os.path.join(HERE, "config.json"), encoding="utf-8") as f:
+        # utf-8-sig: Notepad writes a byte-order mark, which plain utf-8 parsing rejects; without
+        # this a hand-edited config silently falls back to these defaults.
+        with open(os.path.join(HERE, "config.json"), encoding="utf-8-sig") as f:
             cfg.update(json.load(f))
     except Exception:
         pass

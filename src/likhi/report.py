@@ -65,7 +65,13 @@ def cmd_show(args: argparse.Namespace) -> int:
 
 
 def cmd_sync(args: argparse.Namespace) -> int:
-    t = Telemetry("metrics", directory=args.dir, drop=args.drop)
+    drop, endpoint, key = args.drop, args.endpoint, args.key
+    if not drop and not endpoint:  # fall back to whatever the installed shell is configured with
+        from likhi.server import _telemetry_config
+
+        cfg = _telemetry_config()
+        drop, endpoint, key = cfg["drop"], cfg["endpoint"], cfg["key"]
+    t = Telemetry("metrics", directory=args.dir, drop=drop, endpoint=endpoint, key=key)
     result = t.sync()
     print(json.dumps(result, ensure_ascii=False))
     return 0 if not result.get("error") else 1
@@ -161,8 +167,10 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--dir")
     s.add_argument("--limit", type=int, default=40)
     s.set_defaults(fn=cmd_show)
-    s = sub.add_parser("sync", help="ship new lines to the drop folder")
-    s.add_argument("--drop", required=True)
+    s = sub.add_parser("sync", help="ship new lines now (defaults to the configured destination)")
+    s.add_argument("--drop")
+    s.add_argument("--endpoint")
+    s.add_argument("--key")
     s.add_argument("--dir")
     s.set_defaults(fn=cmd_sync)
     s = sub.add_parser("purge", help="delete local telemetry files")
