@@ -8,6 +8,12 @@
 ; rights once and leaves the user with a working Bangla keyboard and nothing to configure.
 
 #define AppName "Likhi"
+; 0.2.1: the Likhi window checked the old text service's identity, so it reported the keyboard as
+;        missing on a working install; it also wrote a font nobody had chosen, because filling a
+;        drop-down raises the same event a click does. Choosing a candidate with an arrow key or a
+;        number now settles the list to the full ranking first, so what you pick is what you saw:
+;        the list shown while typing is the fast one, and for some words it differs. And Bangla can
+;        be pointed at a chosen font across the whole machine, reversibly.
 ; 0.2.0: our own text service, in Rust, replacing PIME entirely. One DLL per architecture and the
 ;        engine; no launcher, no second Python interpreter, no shared PIME directory. Every serious
 ;        bug of the pilot came from that layer rather than from the engine -- registration reading a
@@ -87,7 +93,7 @@
 ;        running engine with PowerShell rather than WMIC, which Windows 11 no longer ships.
 ; 0.1.1: the engine did not look for the shell's config.json in the installed layout, so a fresh
 ;        install never reported telemetry.
-#define AppVersion "0.2.0"
+#define AppVersion "0.2.1"
 #define AppPublisher "Khaled Bin Amir"
 #define AppURL "https://github.com/KhaledBinAmir/likhi"
 #define PimeSource "C:\Program Files (x86)\PIME"
@@ -163,6 +169,9 @@ Source: "..\dist\Likhi.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "enable_keyboard.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "disable_keyboard.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "diagnose.ps1"; DestDir: "{app}"; Flags: ignoreversion
+; Points Bangla at a chosen font across the whole machine, and puts it back. Run from the Likhi
+; window, which raises the administrator prompt it needs.
+Source: "system_font.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\THIRD-PARTY.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
