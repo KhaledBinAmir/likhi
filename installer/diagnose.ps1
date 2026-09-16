@@ -145,9 +145,18 @@ try {
 } catch { Write-Host "  could not read the Application log: $($_.Exception.Message)" }
 
 Section "9. Installer logs"
-$logs = Get-ChildItem "$env:TEMP\Setup Log*.txt" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 3
-if ($logs) { $logs | ForEach-Object { Write-Host "  $($_.LastWriteTime)  $($_.FullName)" } }
-else { Write-Host "  no Inno Setup logs in $env:TEMP (they are written under the account that ran Setup)" }
+# The copy under the install directory is the one that survives; %TEMP% is cleaned by Windows, and
+# when Setup was elevated with a different admin account its log is in that account's TEMP, not this
+# user's. Send Setup.log alongside this report.
+$setupLogs = @()
+foreach ($p in @("$env:ProgramFiles\Likhi\Setup.log",
+                 "${env:ProgramFiles(x86)}\Likhi\Setup.log",
+                 (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Likhi-setup-log.txt'))) {
+    if (Test-Path $p) { $setupLogs += Get-Item $p }
+}
+$setupLogs += Get-ChildItem "$env:TEMP\Setup Log*.txt" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 3
+if ($setupLogs) { $setupLogs | ForEach-Object { Write-Host "  $($_.LastWriteTime)  $($_.FullName)" } }
+else { Write-Host "  none found (a pre-0.1.3 install did not keep its log)" }
 
 if ($transcribing) {
     try { Stop-Transcript | Out-Null } catch { }

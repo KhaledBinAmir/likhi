@@ -7,12 +7,15 @@
 ; rights once and leaves the user with a working Bangla keyboard and nothing to configure.
 
 #define AppName "Likhi"
+; 0.1.3: keep the setup log. Inno writes it to %TEMP%, where Windows deletes it long before anyone
+;        asks what went wrong, so every install now copies it to {app}\Setup.log, and a failed
+;        install also drops it on the user's Desktop next to the diagnostics report.
 ; 0.1.2: register the text service from [Code] so failures are reported instead of swallowed by
 ;        regsvr32 /s, verify the language profile and the user's keyboard afterwards, and stop the
 ;        running engine with PowerShell rather than WMIC, which Windows 11 no longer ships.
 ; 0.1.1: the engine did not look for the shell's config.json in the installed layout, so a fresh
 ;        install never reported telemetry.
-#define AppVersion "0.1.2"
+#define AppVersion "0.1.3"
 #define AppPublisher "Khaled Bin Amir"
 #define AppURL "https://github.com/KhaledBinAmir/likhi"
 #define PimeSource "C:\Program Files (x86)\PIME"
@@ -153,6 +156,21 @@ begin
   Result := True;
 end;
 
+procedure SaveSetupLog(const AlsoToDesktop: Boolean);
+var
+  Src: String;
+begin
+  { Inno writes its log to %TEMP%, which Windows cleans out, so by the time a tester is asked what
+    happened the single most informative file is already gone. Copy it somewhere that survives.
+    The log is still open; Inno shares it for reading and only the last line or two can be missing. }
+  Src := ExpandConstant('{log}');
+  if Src = '' then
+    exit;
+  CopyFile(Src, ExpandConstant('{app}\Setup.log'), False);
+  if AlsoToDesktop then
+    CopyFile(Src, ExpandConstant('{userdesktop}\Likhi-setup-log.txt'), False);
+end;
+
 function KeyboardPresentForUser(): Boolean;
 begin
   { Windows records a user's keyboards here. Checked directly rather than through PowerShell so the
@@ -182,6 +200,7 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Problem: String;
+  Failed: Boolean;
 begin
   { An upgrade must not leave the old engine holding its own files open. }
   if CurStep = ssInstall then
@@ -189,19 +208,31 @@ begin
 
   if CurStep = ssPostInstall then
   begin
+    Failed := False;
     if not RegisterTextService(Problem) then
+    begin
+      Failed := True;
       MsgBox('Likhi was copied to your computer, but the keyboard could not be registered.' + #13#10#13#10 +
              Problem + #13#10#13#10 +
              'The keyboard will not appear until this is fixed. Run "Diagnose Likhi" from the ' +
-             'Start menu and send the output to whoever gave you this installer.',
-             mbError, MB_OK)
+             'Start menu and send the report it saves on your Desktop, together with ' +
+             'Likhi-setup-log.txt, to whoever gave you this installer.',
+             mbError, MB_OK);
+    end
     else if not SetUpKeyboardForUser() then
+    begin
+      Failed := True;
       MsgBox('Likhi is installed and the keyboard is registered, but it could not be added to ' +
              'your language list automatically.' + #13#10#13#10 +
              'Open the Start menu and run "Set up the Likhi keyboard for this user", then press ' +
              'Win+Space.' + #13#10#13#10 +
              'If that does not work either, run "Diagnose Likhi" from the Start menu and send the ' +
-             'output to whoever gave you this installer.',
+             'report it saves on your Desktop, together with Likhi-setup-log.txt, to whoever gave ' +
+             'you this installer.',
              mbInformation, MB_OK);
+    end;
+    { Written last so it captures the checks above, and put on the Desktop only when something went
+      wrong: nobody wants a log file on their Desktop after an install that worked. }
+    SaveSetupLog(Failed);
   end;
 end;
