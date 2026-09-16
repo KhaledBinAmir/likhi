@@ -28,6 +28,9 @@ const CATEGORIES: &[GUID] = &[
     GUID_TFCAT_TIPCAP_SECUREMODE,
     GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT,
     GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
+    // Declares that this service supplies the display attribute it marks compositions with.
+    // Without it an application has no way to resolve the atom, and the underline never appears.
+    GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
 ];
 
 fn wide(s: &str) -> Vec<u16> {

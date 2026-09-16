@@ -14,15 +14,18 @@ use std::rc::Rc;
 
 use windows::core::*;
 use windows::Win32::Foundation::*;
+use windows::Win32::System::Com::*;
+use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::TextServices::*;
 
 use crate::candidates::CandidateWindow;
+use crate::config::{Config, BANGLA_DIGITS};
+use crate::display::{DisplayAttributeInfo, EnumDisplayAttributeInfo};
 use crate::edit::EditSession;
-use crate::engine::{Engine, COMMIT_DEADLINE_MS, DEFAULT_PORT, TYPE_DEADLINE_MS};
+use crate::engine::{Engine, COMMIT_DEADLINE_MS, TYPE_DEADLINE_MS};
+use crate::guids::GUID_DISPLAY_ATTRIBUTE;
 use crate::log;
-
-const CANDIDATES: usize = 5;
 /// How many committed words are sent as context. The engine uses the last one; sending two costs
 /// nothing and leaves room for a bigram-of-bigrams later without a protocol change.
 const CONTEXT_WORDS: usize = 2;
@@ -42,7 +45,7 @@ struct State {
 }
 
 impl State {
-    fn new() -> Self {
+    fn new(port: u16) -> Self {
         State {
             composition: None,
             buffer: String::new(),
@@ -50,7 +53,7 @@ impl State {
             cursor: 0,
             chosen: false,
             context: Vec::new(),
-            engine: Engine::new(DEFAULT_PORT),
+            engine: Engine::new(port),
         }
     }
 
@@ -77,7 +80,8 @@ impl State {
     ITfTextInputProcessorEx,
     ITfThreadMgrEventSink,
     ITfKeyEventSink,
-    ITfCompositionSink
+    ITfCompositionSink,
+    ITfDisplayAttributeProvider
 )]
 pub struct TextService {
     thread_mgr: RefCell<Option<ITfThreadMgr>>,
@@ -86,16 +90,26 @@ pub struct TextService {
     state: Rc<RefCell<State>>,
     /// Created on first use, on the application's UI thread, and kept for the life of the service.
     window: RefCell<Option<CandidateWindow>>,
+    config: Config,
+    /// False after the toggle key: letters go through as plain English without leaving the keyboard.
+    bangla: Cell<bool>,
+    /// The atom TSF uses to name our display attribute on a range. Resolved once at activation.
+    attribute_atom: Cell<u32>,
 }
 
 impl TextService {
     pub fn new() -> Self {
+        let config = Config::load();
+        let state = Rc::new(RefCell::new(State::new(config.server_port)));
         TextService {
             thread_mgr: RefCell::new(None),
             client_id: Cell::new(0),
             thread_mgr_cookie: Cell::new(TF_INVALID_COOKIE),
-            state: Rc::new(RefCell::new(State::new())),
+            state,
             window: RefCell::new(None),
+            config,
+            bangla: Cell::new(true),
+            attribute_atom: Cell::new(0),
         }
     }
 }
@@ -177,7 +191,20 @@ impl TextService_Impl {
         if key_down(VK_CONTROL) || key_down(VK_MENU) {
             return false;
         }
+        // The toggle is ours in both modes: it is how you get back.
+        if self.config.toggle_vk() == Some(vk) {
+            return true;
+        }
+        if !self.bangla.get() {
+            return false;
+        }
         if letter(vk).is_some() {
+            return true;
+        }
+        // A digit with nothing being composed types a Bengali digit rather than picking a candidate.
+        if self.config.bangla_digits && !self.composing() && (0x30..=0x39).contains(&vk)
+            && !key_down(VK_SHIFT)
+        {
             return true;
         }
         if !self.composing() {
@@ -192,6 +219,28 @@ impl TextService_Impl {
     }
 
     fn handle(&self, ctx: &ITfContext, vk: u32) -> Result<()> {
+        if self.config.toggle_vk() == Some(vk) {
+            // Finish whatever is open before switching, so the mode change never eats a word.
+            if self.composing() {
+                self.commit_current(ctx, "")?;
+            }
+            let now = !self.bangla.get();
+            self.bangla.set(now);
+            log!("mode: {}", if now { "Bangla" } else { "English passthrough" });
+            return Ok(());
+        }
+        if !self.bangla.get() {
+            return Ok(());
+        }
+        // A digit with no composition open: type the Bengali digit directly.
+        if self.config.bangla_digits
+            && !self.composing()
+            && (0x30..=0x39).contains(&vk)
+            && !key_down(VK_SHIFT)
+        {
+            let d = BANGLA_DIGITS[(vk - 0x30) as usize];
+            return self.insert(ctx, d);
+        }
         if let Some(ch) = letter(vk) {
             self.state.borrow_mut().buffer.push(ch);
             self.ask(TYPE_DEADLINE_MS);
@@ -207,6 +256,11 @@ impl TextService_Impl {
             };
         }
         if let Some(mark) = punctuation(vk) {
+            let mark = if mark == "\u{0964}" && !self.config.danda_for_period {
+                "."
+            } else {
+                mark
+            };
             return self.commit_current(ctx, mark);
         }
         match VIRTUAL_KEY(vk as u16) {
@@ -288,10 +342,11 @@ impl TextService_Impl {
     /// pointing at the third entry for no reason the typist could see. Each new letter is a new
     /// ranking, and the top of a new ranking is the answer.
     fn ask(&self, deadline_ms: u32) {
+        let wanted = self.config.candidates.clamp(1, 9);
         let mut s = self.state.borrow_mut();
         let buffer = s.buffer.clone();
         let context = s.context.clone();
-        match s.engine.suggest(&buffer, &context, CANDIDATES, deadline_ms) {
+        match s.engine.suggest(&buffer, &context, wanted, deadline_ms) {
             Some(reply) => s.candidates = reply.candidates,
             None => s.candidates.clear(),
         }
@@ -304,6 +359,7 @@ impl TextService_Impl {
         let state = self.state.clone();
         let sink: ITfCompositionSink = self.to_interface();
         let ctx2 = ctx.clone();
+        let atom = self.attribute_atom.get();
         EditSession::run(ctx, self.client_id.get(), move |ec| {
             let text = wide(&state.borrow().buffer);
             let existing = state.borrow().composition.clone();
@@ -320,6 +376,21 @@ impl TextService_Impl {
             };
             let range = unsafe { composition.GetRange() }?;
             unsafe { range.SetText(ec, 0, &text) }?;
+            if atom != 0 {
+                mark_composing(&ctx2, ec, &range, atom);
+            }
+            place_caret_after(&ctx2, ec, &range)
+        })
+    }
+
+    /// Type text straight into the document, with no composition. Used for Bengali digits.
+    fn insert(&self, ctx: &ITfContext, text: &str) -> Result<()> {
+        let text = wide(text);
+        let ctx2 = ctx.clone();
+        EditSession::run(ctx, self.client_id.get(), move |ec| {
+            let insert: ITfInsertAtSelection = ctx2.cast()?;
+            let range =
+                unsafe { insert.InsertTextAtSelection(ec, INSERT_TEXT_AT_SELECTION_FLAGS(0), &text) }?;
             place_caret_after(&ctx2, ec, &range)
         })
     }
@@ -431,6 +502,20 @@ impl TextService_Impl {
     }
 }
 
+/// Tag `range` as text being composed, so the application underlines it.
+///
+/// Best effort: an application that does not support the property simply draws plain text, which is
+/// what happened before this existed. It must never stop the word being typed.
+fn mark_composing(ctx: &ITfContext, ec: u32, range: &ITfRange, atom: u32) {
+    unsafe {
+        let Ok(property) = ctx.GetProperty(&GUID_PROP_ATTRIBUTE) else {
+            return;
+        };
+        let value = VARIANT::from(atom as i32);
+        let _ = property.SetValue(ec, range, &value);
+    }
+}
+
 /// Collapse `range` to its end and make that the selection, so typing continues after the text.
 fn place_caret_after(ctx: &ITfContext, ec: u32, range: &ITfRange) -> Result<()> {
     unsafe {
@@ -491,9 +576,37 @@ impl ITfTextInputProcessorEx_Impl for TextService_Impl {
             let keys: ITfKeystrokeMgr = tim.cast()?;
             let key_sink: ITfKeyEventSink = self.to_interface();
             keys.AdviseKeyEventSink(tid, &key_sink, true)?;
+
+            // The atom that names our display attribute on a range. Without it the composition is
+            // drawn like committed text, so nothing tells the person Space will replace it.
+            if let Ok(categories) = CoCreateInstance::<_, ITfCategoryMgr>(
+                &CLSID_TF_CategoryMgr,
+                None,
+                CLSCTX_INPROC_SERVER,
+            ) {
+                match categories.RegisterGUID(&GUID_DISPLAY_ATTRIBUTE) {
+                    Ok(atom) => self.attribute_atom.set(atom),
+                    Err(e) => log!("no display attribute atom ({e}); composition will not underline"),
+                }
+            }
         }
         *self.thread_mgr.borrow_mut() = Some(tim);
         Ok(())
+    }
+}
+
+// ------------------------------------------------------------------ display attribute
+
+impl ITfDisplayAttributeProvider_Impl for TextService_Impl {
+    fn EnumDisplayAttributeInfo(&self) -> Result<IEnumTfDisplayAttributeInfo> {
+        Ok(EnumDisplayAttributeInfo::new().into())
+    }
+
+    fn GetDisplayAttributeInfo(&self, guid: *const GUID) -> Result<ITfDisplayAttributeInfo> {
+        if guid.is_null() || unsafe { *guid } != GUID_DISPLAY_ATTRIBUTE {
+            return Err(E_INVALIDARG.into());
+        }
+        Ok(DisplayAttributeInfo.into())
     }
 }
 
