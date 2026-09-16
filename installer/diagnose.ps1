@@ -40,6 +40,8 @@ Write-Host "Likhi diagnostics  $(Get-Date -Format s)"
 Write-Host "Windows $([Environment]::OSVersion.Version)  user=$env:USERNAME  admin=$(([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))"
 
 Section "1. Installed files"
+# PIME must be under Program Files (x86)\PIME: the text service DLL builds that path internally when
+# it registers its input methods, so an install anywhere else registers no keyboard at all.
 $roots = @("$env:ProgramFiles\Likhi", "${env:ProgramFiles(x86)}\Likhi", "${env:ProgramFiles(x86)}\PIME")
 foreach ($r in $roots) {
     if (Test-Path $r) {
@@ -49,7 +51,9 @@ foreach ($r in $roots) {
                          "pime\python\input_methods\likhi\ime.json",
                          "pime\python\input_methods\likhi\config.json",
                          "runtime\likhi-server.cmd", "runtime\models\lexicon\unigrams.marisa",
-                         "x64\PIMETextService.dll", "python\input_methods\likhi\ime.json")) {
+                         "x64\PIMETextService.dll", "x86\PIMETextService.dll", "PIMELauncher.exe",
+                         "python\input_methods\likhi\ime.json",
+                         "python\input_methods\likhi\config.json")) {
             $p = Join-Path $r $f
             if (Test-Path $p) { Write-Host "    ok      $f" }
         }

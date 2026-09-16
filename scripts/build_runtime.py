@@ -159,14 +159,18 @@ def build(out: Path, version: str, skip_download: bool) -> None:
 
     # The engine finds its data relative to the package by default; in the runtime the layout
     # differs, so point it at the bundled copies explicitly.
-    # LIKHI_CONFIG is explicit on purpose: the text service's config.json sits in a sibling folder
-    # of this runtime, and guessing it from the package path alone has already failed once.
+    #
+    # LIKHI_CONFIG is explicit on purpose: the text service's config.json does not sit under this
+    # runtime at all. PIMETextService.dll only ever reads its input methods from the PIME directory
+    # below -- it builds that path internally and ignores both its own location and
+    # HKLM\SOFTWARE\PIME -- so that is where the installer puts config.json, and guessing the path
+    # from the package has already failed once.
     (out / "likhi-server.cmd").write_text(
         "@echo off\r\n"
         "setlocal\r\n"
         'set "LIKHI_HOME=%~dp0"\r\n'
         'set "LIKHI_MODELS=%LIKHI_HOME%models"\r\n'
-        'set "LIKHI_CONFIG=%LIKHI_HOME%..\\pime\\python\\input_methods\\likhi\\config.json"\r\n'
+        'set "LIKHI_CONFIG=%ProgramFiles(x86)%\\PIME\\python\\input_methods\\likhi\\config.json"\r\n'
         'start "" "%LIKHI_HOME%python\\pythonw.exe" -m likhi.server %*\r\n',
         encoding="ascii",
     )

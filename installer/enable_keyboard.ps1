@@ -7,7 +7,10 @@
 #>
 param(
     [switch]$SetDefault = $true,
-    [string]$InstallDir = (Split-Path -Parent $PSCommandPath)
+    [string]$InstallDir = (Split-Path -Parent $PSCommandPath),
+    # PIME lives here and nowhere else: PIMETextService.dll builds this path internally when it
+    # registers its input methods, ignoring both its own location and HKLM\SOFTWARE\PIME.
+    [string]$PimeDir = (Join-Path ${env:ProgramFiles(x86)} 'PIME')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,7 +43,7 @@ if ($SetDefault) {
 # learning data; a machine-wide entry would share one engine, and one person's personal
 # dictionary, between everyone signed in.
 $run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-$launcher = Join-Path $InstallDir 'pime\PIMELauncher.exe'
+$launcher = Join-Path $PimeDir 'PIMELauncher.exe'
 $engine = Join-Path $InstallDir 'runtime\likhi-server.cmd'
 if (Test-Path $launcher) {
     Set-ItemProperty -Path $run -Name 'LikhiLauncher' -Value """$launcher"""
