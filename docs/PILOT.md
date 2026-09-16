@@ -259,6 +259,20 @@ then append it, and every future change is measured against those words:
 likhi-eval words --system likhi --dataset feedback-words
 ```
 
+## Removing data
+
+A single install's data, for example a machine used only for testing:
+
+```
+gcloud storage rm -r gs://likhi-telemetry/<install_id>
+```
+
+Everything:
+
+```
+gcloud storage rm -r gs://likhi-telemetry/**
+```
+
 ## Telling testers
 
 Worth saying plainly, because people are right to ask what a keyboard records:
