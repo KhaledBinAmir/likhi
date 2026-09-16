@@ -7,6 +7,14 @@
 ; rights once and leaves the user with a working Bangla keyboard and nothing to configure.
 
 #define AppName "Likhi"
+; 0.1.8: remove the decoy keyboard. Adding bn-BD to the language list makes Windows attach that
+;        language's default physical layout too, Bengali INSCRIPT (0845:00000445), which then sits
+;        next to Likhi in Win+Space. INSCRIPT maps QWERTY keys straight onto Bangla letters, so a
+;        pilot user who lands on it types what looks like gibberish and reasonably concludes the
+;        keyboard is broken. Two of the first three machines hit exactly that. Bangla now means
+;        Likhi; anyone who actually wants INSCRIPT can add it in Settings.
+;        Also clears the forced Likhi default that versions up to 0.1.5 wrote -- undoing our own
+;        past decision, while still leaving any default the person chose themselves alone.
 ; 0.1.7: an upgrade no longer demands a restart. The PIME text service DLLs were marked
 ;        ignoreversion, so every upgrade rewrote a byte-identical file that is mapped into every
 ;        running application; it could not be replaced, Inno scheduled it for the next boot, and
@@ -38,7 +46,7 @@
 ;        running engine with PowerShell rather than WMIC, which Windows 11 no longer ships.
 ; 0.1.1: the engine did not look for the shell's config.json in the installed layout, so a fresh
 ;        install never reported telemetry.
-#define AppVersion "0.1.7"
+#define AppVersion "0.1.8"
 #define AppPublisher "Khaled Bin Amir"
 #define AppURL "https://github.com/KhaledBinAmir/likhi"
 #define PimeSource "C:\Program Files (x86)\PIME"

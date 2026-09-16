@@ -38,16 +38,37 @@ if ($bn.InputMethodTips -notcontains $tip) {
 } else {
     Write-Host "the Likhi keyboard was already present"
 }
+
+# Adding bn-BD makes Windows attach that language's default physical layout as well, Bengali
+# INSCRIPT (0845:00000445). It then sits next to Likhi in Win+Space, and INSCRIPT maps QWERTY keys
+# straight onto Bangla letters, so anyone who lands on it types what looks like gibberish and
+# concludes the keyboard is broken. Two pilot machines hit exactly this. Bangla here means Likhi;
+# a person who genuinely wants INSCRIPT can add it in Settings.
+for ($i = $bn.InputMethodTips.Count - 1; $i -ge 0; $i--) {
+    if ($bn.InputMethodTips[$i] -ne $tip) {
+        Write-Host "removing $($bn.InputMethodTips[$i]) from Bengali (Bangladesh)"
+        $bn.InputMethodTips.RemoveAt($i)
+    }
+}
+
 Set-WinUserLanguageList $list -Force
 
 if ($MakeLikhiDefault) {
     Set-WinDefaultInputMethodOverride -InputTip $tip
     Write-Host "Likhi is now the default input method"
 } else {
-    # Nothing. Installing a keyboard is not a reason to change which one someone starts in, and
-    # whatever they have chosen in Settings is a decision we have no business overwriting. Earlier
-    # versions forced the default to Likhi here, which is how Bangla ended up in every new window.
-    Write-Host "default input method left as you have it; press Win+Space for Likhi"
+    # Installing a keyboard is not a reason to change which one someone starts in, and whatever they
+    # chose in Settings is not ours to overwrite. The one exception is an override we set ourselves:
+    # versions up to 0.1.5 forced the default to Likhi, so every new window opened in Bangla. Undoing
+    # our own past decision is fair; touching anything else is not.
+    $current = $null
+    try { $current = (Get-WinDefaultInputMethodOverride).InputMethodTip } catch { }
+    if ($current -eq $tip) {
+        Set-WinDefaultInputMethodOverride
+        Write-Host "cleared the Likhi default that an earlier version set; new windows use your own default again"
+    } else {
+        Write-Host "default input method left as you have it; press Win+Space for Likhi"
+    }
 }
 
 # Start at sign-in, per user. Each person gets their own engine process and therefore their own
