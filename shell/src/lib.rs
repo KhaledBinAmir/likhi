@@ -6,7 +6,9 @@
 //! linguistic work -- that stays in the Likhi engine, reached over the same local socket protocol
 //! the PIME shell used, so the engine did not have to change for the shell to.
 
+mod candidates;
 mod edit;
+mod engine;
 mod guids;
 mod log;
 mod registry;

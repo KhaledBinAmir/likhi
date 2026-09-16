@@ -16,6 +16,7 @@ crate-type = ["cdylib"]
 # windows::core::implement) generates the COM vtables for our text service, which is the boilerplate
 # that makes hand-written C++ TSF code so long.
 windows = { version = "0.62", features = [
+    "Foundation_Numerics",   # D2D_POINT_2F is an alias for Vector2
     "Win32_Foundation",
     "Win32_System_Com",
     "Win32_System_Ole",
@@ -36,6 +37,8 @@ windows = { version = "0.62", features = [
     "Win32_UI_HiDpi",
 ] }
 windows-core = "0.62"
+# Direct2D points and sizes are Vector2 from here; windows 0.62 has no D2D_POINT_2F alias.
+windows-numerics = "0.3"
 # The engine protocol is JSON lines over a local TCP socket, unchanged from the PIME shell, so the
 # Python engine keeps working without modification while the shell is replaced underneath it.
 serde = { version = "1", features = ["derive"] }

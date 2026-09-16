@@ -37,6 +37,22 @@ impl EditSession {
         }?;
         hr.ok()
     }
+
+    /// Same, but read-only: asking where the composition is on screen must not claim a write lock,
+    /// which an application is entitled to refuse.
+    pub fn run_read(
+        context: &ITfContext,
+        client_id: u32,
+        body: impl FnOnce(u32) -> Result<()> + 'static,
+    ) -> Result<()> {
+        let session: ITfEditSession = EditSession {
+            body: RefCell::new(Some(Box::new(body))),
+        }
+        .into();
+        let hr =
+            unsafe { context.RequestEditSession(client_id, &session, TF_ES_SYNC | TF_ES_READ) }?;
+        hr.ok()
+    }
 }
 
 impl ITfEditSession_Impl for EditSession_Impl {
