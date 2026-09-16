@@ -7,6 +7,14 @@
 ; rights once and leaves the user with a working Bangla keyboard and nothing to configure.
 
 #define AppName "Likhi"
+; 0.1.9: the text service now reads the physical key rather than the character the keyboard layout
+;        underneath it produced. A text service sits on top of a layout, and Windows attaches
+;        Bengali INSCRIPT to bn-BD, which maps the letter keys straight onto Bangla letters -- so
+;        every key arrived as a non-ASCII character, we declined it, PIME passed it to the
+;        application, and the user got raw INSCRIPT. Reported from the pilot as "Likhi types random
+;        Bangla" even with Likhi selected in the picker. It worked on the development machine only
+;        because its bn-BD layout was substituted with US English. 0.1.8 removed the INSCRIPT
+;        keyboard, which hides the symptom; this fixes the cause, so any layout works.
 ; 0.1.8: remove the decoy keyboard. Adding bn-BD to the language list makes Windows attach that
 ;        language's default physical layout too, Bengali INSCRIPT (0845:00000445), which then sits
 ;        next to Likhi in Win+Space. INSCRIPT maps QWERTY keys straight onto Bangla letters, so a
@@ -46,7 +54,7 @@
 ;        running engine with PowerShell rather than WMIC, which Windows 11 no longer ships.
 ; 0.1.1: the engine did not look for the shell's config.json in the installed layout, so a fresh
 ;        install never reported telemetry.
-#define AppVersion "0.1.8"
+#define AppVersion "0.1.9"
 #define AppPublisher "Khaled Bin Amir"
 #define AppURL "https://github.com/KhaledBinAmir/likhi"
 #define PimeSource "C:\Program Files (x86)\PIME"
