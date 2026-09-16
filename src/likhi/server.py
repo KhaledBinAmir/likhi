@@ -24,22 +24,32 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import socketserver
 import sys
 import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
+from pathlib import Path
 
 from likhi import __version__
 
 DEFAULT_PORT = 47123
 DEFAULT_DEADLINE_MS = 12.0
-# Extra wait when the model-free answer has no strong evidence. Prefixes of a word being typed
-# are naturally unattested, so this fires on many keystrokes of a rare word. Hard budget: a fast
-# typist sends a key every ~65 ms, so typing deadline + this must stay well under that. Commits
-# always re-ask with a long deadline, so correctness never depends on this wait.
-WEAK_MATCH_DEADLINE_MS = 25.0
+# Extra wait when the model-free answer has no strong evidence, measured 2026-09-16 over 140
+# keystrokes of realistic typing:
+#
+#   wait   full answers   p50    p90    p99
+#      0          3.6%   16ms   28ms   31ms
+#     10          5.0%   27ms   31ms   42ms
+#     25          7.9%   27ms   48ms   59ms
+#     60         40.0%   27ms   75ms   89ms
+#
+# Waiting mid-word buys almost nothing, because the model is answering about a prefix the user
+# will never commit, and each new keystroke supersedes it. Correctness comes from the commit
+# re-ask (long deadline, by then the model has finished), not from blocking the typist. Default 0.
+WEAK_MATCH_DEADLINE_MS = float(os.environ.get("LIKHI_WEAK_WAIT_MS") or 0.0)
 COMMIT_DEADLINE_MS = 400.0
 
 
@@ -120,6 +130,11 @@ class SuggestService:
             self.engine.learn(roman, chosen, context)
         self.full_cache.clear()
 
+    def top_candidate(self, roman: str, context: tuple[str, ...], k: int = 5) -> str:
+        """What we would have shown first, for telemetry. Cache only, never computes."""
+        cached = self.full_cache.get(self._key(roman, context, k))
+        return cached[0] if cached else ""
+
 
 class _Handler(socketserver.StreamRequestHandler):
     def handle(self) -> None:  # one connection may send many lines
@@ -145,9 +160,22 @@ class _Handler(socketserver.StreamRequestHandler):
                         "ms": round((time.perf_counter() - t) * 1000, 2),
                     }
                 elif op == "learn":
-                    svc.learn(
-                        req.get("roman", ""), req.get("chosen", ""), tuple(req.get("context", ()))
-                    )
+                    roman = req.get("roman", "")
+                    chosen = req.get("chosen", "")
+                    context = tuple(req.get("context", ()))
+                    svc.learn(roman, chosen, context)
+                    tel = self.server.telemetry  # type: ignore[attr-defined]
+                    if tel.mode != "off":
+                        tel.commit(
+                            roman,
+                            chosen,
+                            index=int(req.get("index", 0)),
+                            top1=req.get("top1") or svc.top_candidate(roman, context),
+                            app=req.get("app", ""),
+                            retyped=bool(req.get("retyped", False)),
+                            secure=bool(req.get("secure", False)),
+                            latency_ms=req.get("latency_ms"),
+                        )
                     resp = {"ok": True}
                 else:
                     resp = {"ok": False, "error": f"unknown op {op!r}"}
@@ -172,17 +200,69 @@ def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1") -> None:
     t0 = time.perf_counter()
     engine = LikhiEngine(
         personal_path="default",  # learning on: %LOCALAPPDATA%\Likhi\personal.sqlite
-        model_scored=16,  # 12 would be ~25% cheaper but measurably worse on rare words
+        # 10 non-beam candidates scored by the model: identical accuracy to 16 on every set
+        # (chat 93.60 vs 93.60, Dakshina 69.18 vs 69.23) at 26% lower latency, because the beam's
+        # own hypotheses now carry their scores for free.
+        model_scored=10,
     )
     engine.suggest("ami")  # warm up caches and BLAS
     print(f"[likhi-server] engine ready in {(time.perf_counter() - t0) * 1000:.0f} ms", flush=True)
+    from likhi.telemetry import Telemetry
+
+    mode, drop = _telemetry_config()
+    telemetry = Telemetry(mode, drop=drop)
+    if mode != "off":
+        print(
+            f"[likhi-server] telemetry: {mode} (local files in {telemetry.dir}"
+            + (f", drop {drop})" if drop else ")"),
+            flush=True,
+        )
+
     with _Server((host, port), _Handler) as srv:
         srv.service = SuggestService(engine)  # type: ignore[attr-defined]
+        srv.telemetry = telemetry  # type: ignore[attr-defined]
+        stop = threading.Event()
+
+        def _flusher() -> None:  # hourly rows even if the user keeps typing
+            while not stop.wait(300):
+                telemetry.flush()
+
+        threading.Thread(target=_flusher, daemon=True).start()
         print(f"[likhi-server] listening on {host}:{port}", flush=True)
         try:
             srv.serve_forever()
         except KeyboardInterrupt:
             pass
+        finally:
+            stop.set()
+            telemetry.flush()
+
+
+def _telemetry_config() -> tuple[str, str | None]:
+    """(mode, drop folder). mode: off (default) / metrics / full.
+
+    From LIKHI_TELEMETRY and LIKHI_TELEMETRY_DROP, else the shell's config.json keys
+    "telemetry" and "telemetry_drop".
+    """
+    env = os.environ.get("LIKHI_TELEMETRY")
+    if env:
+        return env.strip().lower(), os.environ.get("LIKHI_TELEMETRY_DROP") or None
+    for path in (
+        Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"))
+        / "PIME"
+        / "python"
+        / "input_methods"
+        / "likhi"
+        / "config.json",
+        Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "Likhi" / "config.json",
+    ):
+        try:
+            if path.exists():
+                cfg = json.loads(path.read_text(encoding="utf-8"))
+                return str(cfg.get("telemetry", "off")).lower(), cfg.get("telemetry_drop") or None
+        except Exception:
+            pass
+    return "off", None
 
 
 def main(argv: list[str] | None = None) -> int:

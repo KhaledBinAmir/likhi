@@ -11,5 +11,10 @@
 	"space_commits": true,
 	"enter_commits": true,
 	"font_name": "Nirmala UI",
-	"font_size": 16
+	"font_size": 16,
+
+	"//telemetry": "off = nothing recorded (default). metrics = counters only, no text. full = counters + struggle words (typed string, chosen word, what we ranked first) ONLY when the first suggestion was not taken.",
+	"telemetry": "off",
+	"//telemetry_drop": "UNC path or folder where each machine drops its own files, e.g. \\\\\\\\SERVER\\\\likhi-pilot. Empty means keep everything local.",
+	"telemetry_drop": ""
 }

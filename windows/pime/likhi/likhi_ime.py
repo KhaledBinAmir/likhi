@@ -36,6 +36,36 @@ from textService import TextService  # provided by PIME
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ID_TOGGLE = 1
+
+
+def _foreground_app():
+    """Executable name of the window being typed into, for per-app telemetry counters.
+
+    Best effort and never fatal: the text service runs inside the target process, but the
+    foreground window is the reliable way to name it. Returns "" on any failure.
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32, kernel32, psapi = ctypes.windll.user32, ctypes.windll.kernel32, ctypes.windll.psapi
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return ""
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        handle = kernel32.OpenProcess(0x0400 | 0x0010, False, pid.value)  # QUERY_INFO | VM_READ
+        if not handle:
+            return ""
+        try:
+            buf = ctypes.create_unicode_buffer(260)
+            if psapi.GetModuleFileNameExW(handle, None, buf, 260):
+                return os.path.basename(buf.value)
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        pass
+    return ""
 TOGGLE_GUID = "{5E2A9C47-1B3D-4F60-8A7E-9D2C4B6F1E35}"
 BANGLA_DIGITS = "০১২৩৪৫৬৭৮৯"
 PUNCT_IN_BANGLA = {".": "।"}  # danda
@@ -122,6 +152,8 @@ class LikhiTextService(TextService):
         self.cands = []
         self.cursor = 0
         self.bangla = True
+        self.had_backspace = False  # this word was corrected while composing
+        self.telemetry_on = str(self.cfg.get("telemetry", "off")).lower() != "off"
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -208,6 +240,7 @@ class LikhiTextService(TextService):
 
         if kc == VK_BACK:
             self.buf = self.buf[:-1]
+            self.had_backspace = True
             self._refresh()
             return True
         if kc == VK_ESCAPE:
@@ -307,14 +340,30 @@ class LikhiTextService(TextService):
 
     def _commit(self, text, trailing):
         roman = self.buf
+        top1 = self.cands[0] if self.cands else ""
+        index = self.cursor if (self.cands and text == self._at(self.cursor)) else 0
         self.setCommitString(text + trailing)
         self.setCompositionString("")
         self.setShowCandidates(False)
-        if text != roman:
-            self.engine.request({"op": "learn", "roman": roman, "chosen": text})
+        if text != roman or self.telemetry_on:
+            msg = {
+                "op": "learn",
+                "roman": roman,
+                "chosen": text,
+                "index": index,
+                "top1": top1,
+                "retyped": self.had_backspace,
+            }
+            if self.telemetry_on:
+                msg["app"] = _foreground_app()
+            self.engine.request(msg)
         self.buf = ""
         self.cands = []
         self.cursor = 0
+        self.had_backspace = False
+
+    def _at(self, i):
+        return self.cands[i] if self.cands and 0 <= i < len(self.cands) else ""
 
     def _reset(self, commit):
         if self.buf and commit:
@@ -324,3 +373,4 @@ class LikhiTextService(TextService):
         self.buf = ""
         self.cands = []
         self.cursor = 0
+        self.had_backspace = False
