@@ -515,6 +515,14 @@ namespace Likhi
             };
 
             Refresh2();
+            // Construction is over: from here a change really is someone clicking.
+            //
+            // This has to be the last statement of the constructor, not the last of RefreshInner.
+            // Refresh2 saves and restores the flag around its work, and during construction the
+            // saved value is true -- so clearing it inside left the restore to put true straight
+            // back, the flag never cleared, every handler returned early, and nothing anyone chose
+            // in this window was ever written.
+            loading = false;
         }
 
         // Named to avoid colliding with Form.Refresh().
@@ -554,8 +562,6 @@ namespace Likhi
             sizeBox.SelectedItem = size;
             systemFont.Checked = Env.SystemFontApplied();
             PreviewFont();
-            // Construction is over: from here a change really is someone clicking.
-            loading = false;
         }
 
         /// <summary>Show the chosen face in the try-it box, so the choice is visible before typing.</summary>
