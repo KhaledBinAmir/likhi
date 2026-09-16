@@ -106,8 +106,21 @@ Three changes, each measured, no accuracy cost:
 | Change | Effect |
 |---|---|
 | GELU via tanh approximation instead of exact erf | activation 2.71 ms → 0.88 ms, max difference 2.3e-4; candidate scoring 51 ms → 42 ms |
-| Model-scored candidates 16 → 10 (beam hypotheses now carry their own score) | identical accuracy (chat 93.60 vs 93.60, Dakshina 69.18 vs 69.23), scoring p50 102 ms → 75 ms |
+| Model-scored candidates 16 → 10 (beam hypotheses now carry their own score) | identical accuracy, scoring p50 102 ms → 75 ms (full sweep below) |
 | Weak-match wait 25 ms → 0 (see the table in server.py) | per-key p50 44 ms → 16 ms, p99 59 ms → 31 ms |
+
+How many non-beam candidates deserve a model score (1,500-item slices, chat + Dakshina):
+
+| scored | chat top-1 | Dakshina top-1 | Dakshina top-5 | p50 per word |
+|---|---|---|---|---|
+| 16 | 93.60 | 69.23 | 90.18 | 102 ms |
+| **10 (chosen)** | 93.60 | 69.18 | 89.81 | 75 ms |
+| 8 | 93.60 | 68.99 | 89.52 | 65 ms |
+| 6 | 93.60 | 68.94 | 89.24 | 58 ms |
+
+10 takes the whole free lunch: 27 ms for 0.05 top-1. Below that each 10 ms costs real accuracy,
+and since the model now runs off the typing path, that time only affects how quickly a commit
+answer is ready, which is already usually a cache hit.
 
 Per-key blocking over 140 keystrokes of realistic typing: **p50 16 ms, p90 29 ms, p99 31 ms**,
 against a budget of ~65 ms for a very fast typist. Commits still receive the full ranking, because
