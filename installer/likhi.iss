@@ -7,6 +7,14 @@
 ; rights once and leaves the user with a working Bangla keyboard and nothing to configure.
 
 #define AppName "Likhi"
+; 0.1.11: the list shown while typing no longer contains words that match nothing you typed. The
+;        fast path runs without the transliteration model, and the aligned romanization data has a
+;        tail of misaligned pairs; one of those plus a high unigram count was enough to reach the
+;        visible list unopposed, so "bangla" offered কোন and হিসেবে and "sonar" offered খনির. That
+;        list is selectable, so pressing 4 committed a word the user never typed. Candidates whose
+;        entire case is a single attested pair now rank behind anything with phonetic agreement,
+;        and only when something is well attested for that spelling. Found from a pilot screenshot:
+;        the full path ranks these away, so every offline measurement looked fine.
 ; 0.1.10: candidate window font down to 14px from 16. Font family, pixel size and how many
 ;        candidates share a row are the only parts of that window an input method can change --
 ;        PIME's customizeUI takes candFontName, candFontSize, candPerRow and candUseCursor, and
@@ -60,7 +68,7 @@
 ;        running engine with PowerShell rather than WMIC, which Windows 11 no longer ships.
 ; 0.1.1: the engine did not look for the shell's config.json in the installed layout, so a fresh
 ;        install never reported telemetry.
-#define AppVersion "0.1.10"
+#define AppVersion "0.1.11"
 #define AppPublisher "Khaled Bin Amir"
 #define AppURL "https://github.com/KhaledBinAmir/likhi"
 #define PimeSource "C:\Program Files (x86)\PIME"
