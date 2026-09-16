@@ -134,8 +134,11 @@ foreach ($n in 'LikhiLauncher', 'LikhiEngine') {
 Section "8. Recent crashes involving text input"
 # A text service DLL runs inside every application that has keyboard focus, so a bad one shows up
 # as other programs dying in MSCTF.dll rather than as anything named Likhi.
+# Get-WinEvent throws rather than returning nothing when no event matches, so a machine with a clean
+# log used to print "could not read the Application log", which reads like a fault and is the exact
+# opposite of what it means. SilentlyContinue, then decide from the result.
 try {
-    $errs = Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='Application Error'; StartTime=(Get-Date).AddDays(-7)} -ErrorAction Stop
+    $errs = Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='Application Error'; StartTime=(Get-Date).AddDays(-7)} -ErrorAction SilentlyContinue
     $hits = $errs | Where-Object { $_.Message -match 'MSCTF|PIMETextService|ctfmon' }
     if ($hits) {
         $hits | Select-Object -First 15 | ForEach-Object {
