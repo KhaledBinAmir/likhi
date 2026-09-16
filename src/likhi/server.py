@@ -186,11 +186,31 @@ class _Handler(socketserver.StreamRequestHandler):
 
 
 class _Server(socketserver.ThreadingTCPServer):
-    allow_reuse_address = True
+    # Deliberately NOT allow_reuse_address on Windows: SO_REUSEADDR there lets a second process
+    # bind a port another process is already listening on, so two engines would silently split the
+    # keyboard's requests between them, each with a different personal dictionary. Binding must
+    # fail instead, and `serve` turns that failure into a clear message.
+    allow_reuse_address = sys.platform != "win32"
     daemon_threads = True
 
 
+def already_running(port: int, host: str = "127.0.0.1") -> bool:
+    """True when a Likhi engine is already answering on this port."""
+    import socket
+
+    try:
+        with socket.create_connection((host, port), timeout=1.0) as s:
+            s.sendall(b'{"op":"ping"}\n')
+            return b'"ok"' in s.recv(256)
+    except OSError:
+        return False
+
+
 def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1") -> None:
+    if already_running(port, host):
+        print(f"[likhi-server] an engine is already listening on {host}:{port}; nothing to do")
+        return
+
     from likhi.engine.threads import limit_blas_threads
 
     # 4 BLAS threads: batched candidate scoring gets ~1.5x faster; the beam is unaffected.
@@ -218,7 +238,12 @@ def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1") -> None:
             flush=True,
         )
 
-    with _Server((host, port), _Handler) as srv:
+    try:
+        srv_ctx = _Server((host, port), _Handler)
+    except OSError as e:
+        print(f"[likhi-server] cannot listen on {host}:{port}: {e}")
+        return
+    with srv_ctx as srv:
         srv.service = SuggestService(engine)  # type: ignore[attr-defined]
         srv.telemetry = telemetry  # type: ignore[attr-defined]
         stop = threading.Event()

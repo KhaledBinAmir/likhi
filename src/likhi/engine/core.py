@@ -13,6 +13,7 @@ Personalization and bigram context are Stage 2 and plug into `score()`.
 from __future__ import annotations
 
 import math
+import os
 from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -22,8 +23,11 @@ from likhi.engine.romankey import key_from_bangla, key_from_roman
 from likhi.engine.textnorm import canonical, normalize_roman, to_output
 
 REPO = Path(__file__).resolve().parents[3]
-DEFAULT_LEXICON = REPO / "models" / "lexicon"
-DEFAULT_XLIT = REPO / "models" / "indicxlit-np"
+# LIKHI_MODELS lets a packaged runtime point at its bundled data, where the repository layout
+# (models/ beside src/) does not exist.
+_MODELS = Path(os.environ["LIKHI_MODELS"]) if os.environ.get("LIKHI_MODELS") else REPO / "models"
+DEFAULT_LEXICON = _MODELS / "lexicon"
+DEFAULT_XLIT = _MODELS / "indicxlit-np"
 
 
 @dataclass
@@ -179,7 +183,6 @@ class LikhiEngine:
 
         self.w = dict(DEFAULT_WEIGHTS)
         import json
-        import os
 
         # LIKHI_WEIGHTS points at an alternative weights file (A/B evaluation of candidate weights).
         tuned = Path(os.environ.get("LIKHI_WEIGHTS") or (lexicon_dir / "weights.json"))
