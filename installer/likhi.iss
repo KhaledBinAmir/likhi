@@ -7,7 +7,9 @@
 ; rights once and leaves the user with a working Bangla keyboard and nothing to configure.
 
 #define AppName "Likhi"
-#define AppVersion "0.1.0"
+; 0.1.1 fixes a silent failure in 0.1.0: the engine did not look for the shell's config.json in the
+; installed layout, so a fresh install never reported telemetry.
+#define AppVersion "0.1.1"
 #define AppPublisher "Khaled Bin Amir"
 #define AppURL "https://github.com/KhaledBinAmir/likhi"
 #define PimeSource "C:\Program Files (x86)\PIME"

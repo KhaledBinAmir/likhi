@@ -159,11 +159,14 @@ def build(out: Path, version: str, skip_download: bool) -> None:
 
     # The engine finds its data relative to the package by default; in the runtime the layout
     # differs, so point it at the bundled copies explicitly.
+    # LIKHI_CONFIG is explicit on purpose: the text service's config.json sits in a sibling folder
+    # of this runtime, and guessing it from the package path alone has already failed once.
     (out / "likhi-server.cmd").write_text(
         "@echo off\r\n"
         "setlocal\r\n"
         'set "LIKHI_HOME=%~dp0"\r\n'
         'set "LIKHI_MODELS=%LIKHI_HOME%models"\r\n'
+        'set "LIKHI_CONFIG=%LIKHI_HOME%..\\pime\\python\\input_methods\\likhi\\config.json"\r\n'
         'start "" "%LIKHI_HOME%python\\pythonw.exe" -m likhi.server %*\r\n',
         encoding="ascii",
     )
