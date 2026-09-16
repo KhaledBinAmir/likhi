@@ -1,12 +1,21 @@
 ﻿; Likhi installer. Build with:
 ;   python scripts/build_runtime.py
 ;   python scripts/build_client.py
+;   python scripts/build_app.py
 ;   "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer\likhi.iss
 ;
 ; Produces dist\LikhiSetup-<version>.exe: one per-machine installer that needs administrator
 ; rights once and leaves the user with a working Bangla keyboard and nothing to configure.
 
 #define AppName "Likhi"
+; 0.1.12: a Start menu entry called simply "Likhi". Installing a keyboard leaves nothing to click,
+;        and everyone looks for an app: pilot users searched the Start menu, found nothing, and had
+;        no way to tell a working install from a broken one. The window says whether the keyboard
+;        and the engine are working, how to switch to Bangla, gives somewhere safe to try typing,
+;        and carries the two settings that belong to the person rather than the machine -- start at
+;        sign-in, and whether to share usage data. Usage settings are stored per user and merged
+;        over the installed config, so turning reporting off does not need an administrator and does
+;        not decide for anyone else on a shared machine.
 ; 0.1.11: the list shown while typing no longer contains words that match nothing you typed. The
 ;        fast path runs without the transliteration model, and the aligned romanization data has a
 ;        tail of misaligned pairs; one of those plus a high unigram count was enough to reach the
@@ -68,7 +77,7 @@
 ;        running engine with PowerShell rather than WMIC, which Windows 11 no longer ships.
 ; 0.1.1: the engine did not look for the shell's config.json in the installed layout, so a fresh
 ;        install never reported telemetry.
-#define AppVersion "0.1.11"
+#define AppVersion "0.1.12"
 #define AppPublisher "Khaled Bin Amir"
 #define AppURL "https://github.com/KhaledBinAmir/likhi"
 #define PimeSource "C:\Program Files (x86)\PIME"
@@ -141,6 +150,9 @@ Source: "{#PimeSource}\python\*"; DestDir: "{#PimeDir}\python"; Flags: ignorever
 Source: "{#PimeSource}\python\input_methods\*.py"; DestDir: "{#PimeDir}\python\input_methods"; Flags: ignoreversion skipifsourcedoesntexist
 ; Our text service, with the pilot keys already stamped in by scripts/build_client.py.
 Source: "..\dist\likhi\*"; DestDir: "{#PimeDir}\python\input_methods\likhi"; Flags: ignoreversion
+; The window people open from the Start menu: status, how to switch, and the two settings that are
+; theirs to make. Needs no runtime of its own -- .NET Framework 4 is part of Windows.
+Source: "..\dist\Likhi.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; Per-user keyboard setup and documentation.
 Source: "enable_keyboard.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "disable_keyboard.ps1"; DestDir: "{app}"; Flags: ignoreversion
@@ -157,6 +169,9 @@ Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Type: filesandordirs; Name: "{app}\pime"
 
 [Icons]
+; First, and named just "Likhi", because that is what someone types into the Start menu when they
+; want to know whether the thing they installed is working.
+Name: "{group}\Likhi"; Filename: "{app}\Likhi.exe"
 Name: "{group}\Likhi on GitHub"; Filename: "{#AppURL}"
 ; Any other user of this machine runs this once to get the keyboard and their own engine.
 Name: "{group}\Set up the Likhi keyboard for this user"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\enable_keyboard.ps1"" -InstallDir ""{app}"" -PimeDir ""{#PimeDir}"""
