@@ -25,6 +25,10 @@ models/lexicon/*
 *.bz2
 *.xz
 
+# Deployment secrets: ingest and admin keys for a pilot, never committed
+pilot.local.json
+pilot/
+
 # Personal / private
 data/personal/*.jsonl
 !data/personal/README.md

@@ -23,6 +23,12 @@ Put it behind a reverse proxy (Caddy, nginx, Cloudflare Tunnel) for a real certi
 Endpoints:
     POST /v1/ingest   body = newline-delimited JSON, headers X-Likhi-Install / -Stream / -Seq / -Key
     GET  /v1/health   liveness, no auth (also /healthz when self-hosted; Cloud Run reserves that one)
+    GET  /v1/export   read everything back as NDJSON, header X-Likhi-Admin-Key
+
+Two separate keys on purpose. The ingest key ships inside the client, so anyone holding the client
+can extract it; it can only append chunks and can never read anything. The admin key is never
+distributed and is the only way to read the collected data. Export is disabled unless an admin key
+is set.
 
 Safety properties that matter here:
   * the install id and stream name are validated against strict patterns before touching a path,
@@ -43,8 +49,10 @@ import ssl
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs
 
 MAX_BODY = 1024 * 1024
+MAX_EXPORT = 64 * 1024 * 1024
 RE_INSTALL = re.compile(r"^[0-9a-f]{8,32}$")
 RE_STREAM = re.compile(r"^(metrics|events)$")
 RE_SEQ = re.compile(r"^[0-9]{1,9}$")
@@ -66,6 +74,18 @@ class Storage:
         if self._bucket is not None:
             return self._bucket.blob(name).exists()
         return (self.data_dir / name).exists()
+
+    def iter_chunks(self, stream: str | None = None):
+        """Yield (install_id, object_name, bytes) for every stored chunk, oldest name first."""
+        if self._bucket is not None:
+            for blob in sorted(self._bucket.list_blobs(), key=lambda b: b.name):
+                install, _, base = blob.name.partition("/")
+                if base and (stream is None or base.startswith(stream + "-")):
+                    yield install, base, blob.download_as_bytes()
+            return
+        for path in sorted(self.data_dir.glob("*/*.jsonl")):
+            if stream is None or path.name.startswith(stream + "-"):
+                yield path.parent.name, path.name, path.read_bytes()
 
     def put(self, name: str, body: bytes) -> None:
         if self._bucket is not None:
@@ -89,6 +109,7 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "likhi-ingest/1"
     storage: Storage
     shared_key: str | None
+    admin_key: str | None = None
 
     def log_message(self, fmt: str, *args) -> None:  # no IP addresses in logs
         sys.stderr.write("[ingest] " + (fmt % args).replace(self.address_string(), "-") + "\n")
@@ -106,10 +127,56 @@ class Handler(BaseHTTPRequestHandler):
         # /healthz is answered by Google's frontend on Cloud Run and never reaches the container
         # (measured 2026-09-16: it returns a 1568-byte HTML 404 while every other path arrives
         # here), so the real health path is namespaced. /healthz still works when self-hosted.
-        if self.path.split("?")[0] in ("/v1/health", "/healthz"):
-            self._reply(200, '{"ok":true}')
-        else:
-            self._reply(404, '{"error":"not found"}')
+        path, _, query = self.path.partition("?")
+        if path in ("/v1/health", "/healthz"):
+            return self._reply(200, '{"ok":true}')
+        if path == "/v1/export":
+            return self._export(query)
+        self._reply(404, '{"error":"not found"}')
+
+    def _export(self, query: str) -> None:
+        """Every stored line as NDJSON, each with the install id it came from.
+
+        Disabled unless an admin key is configured, and that key is never shipped to clients.
+        """
+        if not self.admin_key:
+            return self._reply(404, '{"error":"export not enabled"}')
+        if self.headers.get("X-Likhi-Admin-Key") != self.admin_key:
+            return self._reply(401, '{"error":"bad admin key"}')
+        params = parse_qs(query)
+        stream = (params.get("stream") or [None])[0]
+        if stream is not None and not RE_STREAM.match(stream):
+            return self._reply(400, '{"error":"bad stream"}')
+        since = (params.get("since") or [""])[0]  # hour bucket, e.g. 2026-09-16T00
+
+        out = bytearray()
+        try:
+            for install, name, body in self.storage.iter_chunks(stream):
+                for line in body.decode("utf-8", "replace").splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except Exception:
+                        continue
+                    if since and str(row.get("h", "")) < since:
+                        continue
+                    row["_install"] = install
+                    row["_chunk"] = name
+                    out += json.dumps(row, ensure_ascii=False).encode("utf-8") + b"\n"
+                    if len(out) > MAX_EXPORT:
+                        out += b'{"_truncated":true}\n'
+                        raise StopIteration
+        except StopIteration:
+            pass
+        except Exception as e:
+            self.log_message("export failed: %s", type(e).__name__)
+            return self._reply(503, '{"error":"export failed"}')
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(bytes(out))
 
     def do_POST(self) -> None:  # noqa: N802
         if self.path.split("?")[0] != "/v1/ingest":
@@ -160,7 +227,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--gcs", help="Cloud Storage bucket name (instead of --data)")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=int(os.environ.get("PORT") or 8098))
-    ap.add_argument("--key", default=os.environ.get("LIKHI_INGEST_KEY"), help="shared secret")
+    ap.add_argument("--key", default=os.environ.get("LIKHI_INGEST_KEY"), help="client write key")
+    ap.add_argument(
+        "--admin-key",
+        default=os.environ.get("LIKHI_ADMIN_KEY"),
+        help="key for GET /v1/export; never ship this to clients. Export is off when unset.",
+    )
     ap.add_argument("--certfile", help="PEM certificate to serve TLS directly")
     ap.add_argument("--keyfile", help="PEM private key")
     args = ap.parse_args(argv)
@@ -173,8 +245,10 @@ def main(argv: list[str] | None = None) -> int:
         data_dir.mkdir(parents=True, exist_ok=True)
     Handler.storage = Storage(data_dir, bucket)
     Handler.shared_key = args.key
+    Handler.admin_key = args.admin_key
     if not args.key:
         print("[ingest] WARNING: no key set, anyone who can reach this port can post", flush=True)
+    print(f"[ingest] export endpoint: {'enabled' if args.admin_key else 'disabled'}", flush=True)
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     scheme = "http"

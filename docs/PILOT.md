@@ -190,6 +190,47 @@ the next attempt sends the same bytes.
 Permissions: give each tester's account write access to the share and no read access to other
 folders. Even redacted struggle words are someone's typing.
 
+## Two keys, and why
+
+| Key | Where it lives | What it can do |
+|---|---|---|
+| ingest key | baked into every installed client | append chunks, nothing else |
+| admin key | only on the server and in `pilot.local.json` | read everything back |
+
+An ingest key inside a distributed client is not a secret: anyone who installs the client can
+extract it. That is fine as long as it cannot read anything, which is why reading needs a second
+key that is never shipped. Set both when deploying:
+
+```
+gcloud run deploy likhi-ingest --source server --region us-central1 \
+    --set-env-vars LIKHI_INGEST_BUCKET=likhi-telemetry,LIKHI_INGEST_KEY=$SECRET,LIKHI_ADMIN_KEY=$ADMIN \
+    --allow-unauthenticated --min-instances 0
+```
+
+`GET /v1/export` is disabled entirely when no admin key is set.
+
+## Building a client with the keys baked in
+
+Testers should configure nothing. Keep the keys in `pilot.local.json` at the repository root
+(git-ignored):
+
+```json
+{"endpoint": "https://likhi-ingest-xxx.run.app/v1/ingest",
+ "ingest_key": "...",
+ "admin_key":  "..."}
+```
+
+Then:
+
+```
+python scripts/build_client.py                       # telemetry on, keys stamped in
+python scripts/build_client.py --telemetry off       # a build that reports nothing
+powershell -File windows\pime\install_dev.ps1 -Source dist\likhi
+```
+
+The build refuses to stamp the admin key into a client, and refuses to build a reporting client
+with no endpoint.
+
 ## Looking at the data
 
 On a tester's machine, showing them exactly what would leave it:
@@ -198,11 +239,12 @@ On a tester's machine, showing them exactly what would leave it:
 likhi-report show
 ```
 
-On your machine, pointed at the drop folder:
+On your machine, pulling from the endpoint (or pointed at a drop folder):
 
 ```
-likhi-report collect --drop \\SERVER\likhi-pilot
-likhi-report collect --drop \\SERVER\likhi-pilot --out pilot-words.jsonl
+likhi-report pull --out pilot          # uses pilot.local.json
+likhi-report collect --drop pilot
+likhi-report collect --drop pilot --out pilot-words.jsonl
 ```
 
 `collect` prints per-install health and the struggle words ranked by **how many different installs
