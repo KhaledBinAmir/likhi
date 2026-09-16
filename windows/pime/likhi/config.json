@@ -16,5 +16,10 @@
 	"//telemetry": "off = nothing recorded (default). metrics = counters only, no text. full = counters + struggle words (typed string, chosen word, what we ranked first) ONLY when the first suggestion was not taken.",
 	"telemetry": "off",
 	"//telemetry_drop": "UNC path or folder where each machine drops its own files, e.g. \\\\\\\\SERVER\\\\likhi-pilot. Empty means keep everything local.",
-	"telemetry_drop": ""
+	"telemetry_drop": "",
+	"//telemetry_endpoint": "HTTPS ingest URL, e.g. https://likhi-ingest-xxxx.run.app/v1/ingest. Works alongside or instead of telemetry_drop.",
+	"telemetry_endpoint": "",
+	"telemetry_key": "",
+	"//telemetry_sync_seconds": "How often new lines are shipped, on a background thread. 900 = every 15 minutes.",
+	"telemetry_sync_seconds": 900
 }
