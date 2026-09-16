@@ -99,6 +99,31 @@ digits fine, Space/Enter behave as intended. Reported misses are in `data/feedba
   input method for each app window" in Settings → Time & language → Typing → Advanced keyboard
   settings.
 
+## Latency work, 2026-09-16 evening (Stage 2 item 3)
+
+Three changes, each measured, no accuracy cost:
+
+| Change | Effect |
+|---|---|
+| GELU via tanh approximation instead of exact erf | activation 2.71 ms → 0.88 ms, max difference 2.3e-4; candidate scoring 51 ms → 42 ms |
+| Model-scored candidates 16 → 10 (beam hypotheses now carry their own score) | identical accuracy (chat 93.60 vs 93.60, Dakshina 69.18 vs 69.23), scoring p50 102 ms → 75 ms |
+| Weak-match wait 25 ms → 0 (see the table in server.py) | per-key p50 44 ms → 16 ms, p99 59 ms → 31 ms |
+
+Per-key blocking over 140 keystrokes of realistic typing: **p50 16 ms, p90 29 ms, p99 31 ms**,
+against a budget of ~65 ms for a very fast typist. Commits still receive the full ranking, because
+the shell re-asks with a long deadline once the word is finished.
+
+Known limitation: during a *cold* rare word the candidate list can show lexicon-only guesses until
+the model finishes, since PIME is synchronous and cannot be pushed an update. The committed word is
+always the full ranking. A candidate window we control (Stage 3) could update asynchronously.
+
+## Pilot telemetry (built 2026-09-16, off by default)
+
+`likhi.telemetry` + `likhi-report`, documented in [PILOT.md](PILOT.md). Modes off / metrics / full;
+struggle events only, never accepted words; digits, symbols, over-long strings and secure fields
+dropped before writing; hour-granularity timestamps; random install id. Remote collection is a
+folder drop (SMB or any path) of immutable numbered chunks, synced off the typing path, retry-safe.
+
 ## Backlog: community data (post v0.1, opt-in only)
 
 Collect only struggle events, never accepted first suggestions: (a) user picked candidate 2..5

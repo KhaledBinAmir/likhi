@@ -47,6 +47,7 @@ likhi-collect = "likhi.eval.collect:main"
 likhi-tune = "likhi.eval.tune:main"
 likhi-server = "likhi.server:main"
 likhi-stress = "likhi.eval.stress:main"
+likhi-report = "likhi.report:main"
 
 [project.urls]
 Homepage = "https://github.com/KhaledBinAmir/likhi"

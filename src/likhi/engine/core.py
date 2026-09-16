@@ -13,9 +13,9 @@ Personalization and bigram context are Stage 2 and plug into `score()`.
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from functools import lru_cache
 from pathlib import Path
 
 from likhi.engine.romankey import key_from_bangla, key_from_roman
@@ -186,9 +186,11 @@ class LikhiEngine:
         if tuned.exists():  # written by likhi-tune
             self.w.update(json.loads(tuned.read_text(encoding="utf-8")))
         self.w.update(weights or {})
-        self.beam = beam
+        self.beam = int(os.environ.get("LIKHI_BEAM") or beam)
         self.max_per_channel = max_per_channel
-        self.model_scored = model_scored
+        # How many non-beam candidates get a teacher-forced model score. Beam hypotheses already
+        # carry their own score, so this only covers lexicon/key/rule candidates.
+        self.model_scored = int(os.environ.get("LIKHI_MODEL_SCORED") or model_scored)
         self.xlit = None
         if use_xlit and xlit_dir is not None:
             from likhi.engine.xlit_np import XlitTransformer
@@ -207,7 +209,11 @@ class LikhiEngine:
             from likhi.engine.personal import PersonalStore
 
             self.personal = PersonalStore(None if personal_path == "default" else personal_path)
-        self._suggest_cached = lru_cache(maxsize=4096)(self._suggest)
+        # Keyed by (roman, k, context, use_model). A plain dict rather than lru_cache so learn()
+        # can drop just the entries for the word that changed, instead of the whole cache: every
+        # committed word calls learn(), and clearing 4096 entries each time undoes the caching.
+        self._cache: OrderedDict[tuple, tuple[str, ...]] = OrderedDict()
+        self._cache_max = 4096
 
     # ------------------------------------------------------------------ learning
 
@@ -215,8 +221,10 @@ class LikhiEngine:
         """Record a commit. Called by the shell whenever the user commits a candidate."""
         if self.personal is None or not roman or not chosen:
             return
-        self.personal.learn(roman, chosen, tuple(context))
-        self._suggest_cached.cache_clear()
+        r = normalize_roman(roman)
+        self.personal.learn(r, chosen, tuple(context))
+        for key in [k for k in self._cache if k[0] == r]:
+            self._cache.pop(key, None)
 
     # ------------------------------------------------------------------ features
 
@@ -537,12 +545,21 @@ class LikhiEngine:
     ) -> list[str]:
         """Ranked candidates. ``fast=True`` skips the transliteration model (see candidates()).
         ``abort`` (callable) lets a caller abandon a full computation that became stale."""
+        r = normalize_roman(roman)
         prev = (canonical(context[-1]),) if context else ()
         if abort is not None:
-            # abortable computations bypass the cache key (a callable is not hashable/stable)
-            out = self._suggest(normalize_roman(roman), k, prev, not fast, abort)
-            return list(out)
-        return list(self._suggest_cached(normalize_roman(roman), k, prev, not fast))
+            # abortable computations bypass the cache (they may be dropped part-way)
+            return list(self._suggest(r, k, prev, not fast, abort))
+        key = (r, k, prev, not fast)
+        hit = self._cache.get(key)
+        if hit is not None:
+            self._cache.move_to_end(key)
+            return list(hit)
+        out = self._suggest(r, k, prev, not fast)
+        self._cache[key] = out
+        if len(self._cache) > self._cache_max:
+            self._cache.popitem(last=False)
+        return list(out)
 
     def explain(self, roman: str, k: int = 8) -> list[tuple[str, float, Feats]]:
         feats = self.candidates(roman)
