@@ -58,17 +58,55 @@ Client config on each machine:
 writes to Cloud Storage. It stores the same object layout as the folder drop, so everything
 downstream is unchanged.
 
+From Cloud Shell or any machine with `gcloud`. `--source server` is a path on the machine running
+the command, so fetch the repository first; Cloud Shell starts with an empty home directory.
+
 ```
+git clone https://github.com/KhaledBinAmir/likhi.git
+cd likhi
+
+SECRET=$(openssl rand -hex 24)   # keep this, the clients need it
+echo "$SECRET"
+
 gcloud storage buckets create gs://likhi-telemetry --location us-central1
+
 gcloud run deploy likhi-ingest --source server --region us-central1 \
-    --set-env-vars LIKHI_INGEST_BUCKET=likhi-telemetry,LIKHI_INGEST_KEY=a-long-random-string \
+    --set-env-vars LIKHI_INGEST_BUCKET=likhi-telemetry,LIKHI_INGEST_KEY=$SECRET \
     --allow-unauthenticated --min-instances 0
 ```
 
-`--min-instances 0` lets it scale to zero, so an idle pilot runs no instances at all. Cloud Run
-gives the container's service account write access to the bucket by granting it the Storage Object
-Admin role, or run `gcloud storage buckets add-iam-policy-binding` for the service account it
-creates.
+`--allow-unauthenticated` is required because the keyboards post without Google credentials; the
+shared key is what authenticates them. `--min-instances 0` lets the service scale to zero, so an
+idle pilot runs no instances at all.
+
+Then give the service's identity permission to write to the bucket, otherwise every upload returns
+503:
+
+```
+PROJECT=$(gcloud config get-value project)
+NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
+gcloud storage buckets add-iam-policy-binding gs://likhi-telemetry \
+    --member="serviceAccount:${NUMBER}-compute@developer.gserviceaccount.com" \
+    --role=roles/storage.objectAdmin
+```
+
+Check it end to end. The second command should answer `{"ok": true, "stored": 1}` and the third
+should list the object:
+
+```
+URL=$(gcloud run services describe likhi-ingest --region us-central1 --format='value(status.url)')
+curl -s "$URL/healthz"
+
+curl -sS -X POST "$URL/v1/ingest" \
+    -H "X-Likhi-Install: abc123def456" -H "X-Likhi-Stream: events" -H "X-Likhi-Seq: 1" \
+    -H "X-Likhi-Key: $SECRET" -H "Content-Type: application/x-ndjson" \
+    --data-binary '{"h":"test","roman":"amr","chose":"আমরা","we_said":"আমার","pos":2,"retyped":false}'
+
+gcloud storage ls -r gs://likhi-telemetry
+```
+
+Posting without the key must return 401. Deleting the test object afterwards keeps the pilot data
+clean: `gcloud storage rm gs://likhi-telemetry/abc123def456/events-00001.jsonl`.
 
 To read the data back:
 
