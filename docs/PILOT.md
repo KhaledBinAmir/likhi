@@ -95,7 +95,7 @@ should list the object:
 
 ```
 URL=$(gcloud run services describe likhi-ingest --region us-central1 --format='value(status.url)')
-curl -s "$URL/healthz"
+curl -s "$URL/v1/health"
 
 curl -sS -X POST "$URL/v1/ingest" \
     -H "X-Likhi-Install: abc123def456" -H "X-Likhi-Stream: events" -H "X-Likhi-Seq: 1" \
@@ -156,6 +156,10 @@ point at `https://your-host/v1/ingest`.
 - Bodies are capped at 1 MB and must be newline-delimited JSON objects.
 - Client IP addresses are not recorded.
 - Requests without the shared key are refused.
+
+One Cloud Run quirk, measured rather than assumed: the platform answers `/healthz` itself and that
+request never reaches the container, so the health path is `/v1/health`. Every other path arrives
+normally.
 
 ## Collecting logs from several machines on a LAN
 
