@@ -37,7 +37,9 @@ namespace Likhi
     // Everything the window needs to know about this machine, read fresh each time it is shown.
     static class Env
     {
-        public const string Tip = "0845:{35F67E9D-A54D-4177-9697-8B0AB71A9E04}{9B4E7C21-3D5A-4F86-A2E1-6C0D8B7F5A13}";
+        // Must match shell/src/guids.rs. It did not after 0.2.0 replaced the text service, so the
+        // window told everyone their keyboard was missing while it was installed and working.
+        public const string Tip = "0845:{1D24C804-FAD0-4B32-AEDD-1317F4E6221E}{502AB3FE-5B7C-43E9-89D1-BE885846AE0D}";
         public const int EnginePort = 47123;
 
         // The application directory is wherever this executable sits; PIME is fixed, because its
@@ -149,16 +151,14 @@ namespace Likhi
                 @"Software\Microsoft\Windows\CurrentVersion\Run"))
             {
                 if (k == null) return;
+                // One entry: the text service is a DLL Windows loads itself, so there is no
+                // launcher to start any more. Any LikhiLauncher left by a PIME-era version is
+                // removed either way, or it would run a program that is no longer installed.
+                try { k.DeleteValue("LikhiLauncher", false); } catch { }
                 if (on)
-                {
-                    k.SetValue("LikhiLauncher", "\"" + Path.Combine(PimeDir, "PIMELauncher.exe") + "\"");
                     k.SetValue("LikhiEngine", "\"" + Path.Combine(AppDir, @"runtime\likhi-server.cmd") + "\"");
-                }
                 else
-                {
-                    try { k.DeleteValue("LikhiLauncher", false); } catch { }
                     try { k.DeleteValue("LikhiEngine", false); } catch { }
-                }
             }
         }
 
@@ -202,13 +202,20 @@ namespace Likhi
             File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
         }
 
+        // Beside the executable when installed; the fixed install path as well, because this window
+        // is also run straight out of a build directory during development and would otherwise read
+        // no machine config at all and report every setting as its default.
         static string MachineConfigPath
         {
             get
             {
-                string inApp = Path.Combine(AppDir, "config.json");
-                if (File.Exists(inApp)) return inApp;
-                return Path.Combine(PimeDir, @"python\input_methods\likhi\config.json");
+                foreach (string candidate in new[] {
+                    Path.Combine(AppDir, "config.json"),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"Likhi\config.json"),
+                    Path.Combine(PimeDir, @"python\input_methods\likhi\config.json"),
+                })
+                    if (File.Exists(candidate)) return candidate;
+                return Path.Combine(AppDir, "config.json");
             }
         }
 
@@ -276,6 +283,36 @@ namespace Likhi
             return found;
         }
 
+        /// <summary>Whether Bangla has been pointed at a chosen font everywhere on this machine.
+        /// The backup file exists only while that is in force, so it is the honest test.</summary>
+        public static bool SystemFontApplied()
+        {
+            return File.Exists(Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                @"Likhi\system-font-backup.json"));
+        }
+
+        /// <summary>Apply or undo the machine-wide setting. Raises a UAC prompt: it is machine-wide,
+        /// so it cannot be done from this window's own rights, and should not be.</summary>
+        public static bool SetSystemFont(string family, bool apply)
+        {
+            string script = Path.Combine(AppDir, "system_font.ps1");
+            if (!File.Exists(script)) return false;
+            string args = "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\" " +
+                (apply ? "-Apply \"" + family + "\"" : "-Restore");
+            try
+            {
+                var psi = new ProcessStartInfo("powershell.exe", args);
+                psi.Verb = "runas";
+                psi.UseShellExecute = true;
+                psi.WindowStyle = ProcessWindowStyle.Hidden;
+                Process p = Process.Start(psi);
+                p.WaitForExit();
+                return p.ExitCode == 0;
+            }
+            catch { return false; }   // the person declined the prompt, which is an answer
+        }
+
         static bool Known(string name)
         {
             string[] families = {
@@ -319,7 +356,7 @@ namespace Likhi
     {
         readonly bool dark = IsDarkTheme();
         Label statusKeyboard, statusEngine;
-        CheckBox autostart, reporting;
+        CheckBox autostart, reporting, systemFont;
         TextBox tryHere;
         ComboBox fontBox, sizeBox;
         // Set while the window writes its own controls. Without it, showing the current state fires
@@ -352,8 +389,12 @@ namespace Likhi
 
         public MainForm()
         {
+            // Set for the whole of construction. Filling a drop-down selects its first item, which
+            // raises the same change event a person clicking would, and that wrote a font nobody
+            // had chosen into the settings file before the window was even on screen.
+            loading = true;
             Text = "Likhi";
-            ClientSize = new Size(520, 578);
+            ClientSize = new Size(520, 630);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
@@ -396,7 +437,10 @@ namespace Likhi
             foreach (int s in new[] { 12, 13, 14, 16, 18, 20, 24 }) sizeBox.Items.Add(s.ToString());
             Controls.Add(sizeBox);
             Body("px", 428, y + 4, Dim, "Segoe UI", 18);
-            y += 34;
+            y += 32;
+            systemFont = Check("Use this font for Bangla in all apps", 18, y); y += 22;
+            Body("Changes what Bangla looks like everywhere, not just here. Reversible.", 40, y, Dim, "Segoe UI", 18);
+            y += 30;
 
             Head("Try it here", 11f, Fg, 18, y); y += 26;
             tryHere = new TextBox();
@@ -448,6 +492,27 @@ namespace Likhi
                 Env.SetSetting("font_size", sizeBox.SelectedItem.ToString());
                 PreviewFont();
             };
+            systemFont.CheckedChanged += delegate
+            {
+                if (loading) return;
+                string family = fontBox.SelectedItem as string;
+                bool wanted = systemFont.Checked;
+                if (wanted && string.IsNullOrEmpty(family)) { systemFont.Checked = false; return; }
+                if (!Env.SetSystemFont(family, wanted))
+                {
+                    // Declined the prompt, or the script failed: put the box back rather than
+                    // leaving it claiming something that did not happen.
+                    loading = true;
+                    systemFont.Checked = !wanted;
+                    loading = false;
+                    return;
+                }
+                MessageBox.Show(this,
+                    wanted
+                        ? "Bangla will use " + family + " everywhere.\n\nApplications read this when they start, so restart the ones you have open."
+                        : "Bangla is back to the system font everywhere.\n\nRestart open applications to see it.",
+                    "Likhi", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            };
 
             Refresh2();
         }
@@ -455,8 +520,9 @@ namespace Likhi
         // Named to avoid colliding with Form.Refresh().
         void Refresh2()
         {
+            bool was = loading;
             loading = true;
-            try { RefreshInner(); } finally { loading = false; }
+            try { RefreshInner(); } finally { loading = was; }
         }
 
         void RefreshInner()
@@ -486,7 +552,10 @@ namespace Likhi
             string size = Env.Setting("font_size", "14");
             if (!sizeBox.Items.Contains(size)) size = "14";
             sizeBox.SelectedItem = size;
+            systemFont.Checked = Env.SystemFontApplied();
             PreviewFont();
+            // Construction is over: from here a change really is someone clicking.
+            loading = false;
         }
 
         /// <summary>Show the chosen face in the try-it box, so the choice is visible before typing.</summary>

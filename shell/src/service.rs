@@ -39,6 +39,9 @@ struct State {
     /// True once the person has moved the highlight themselves. An explicit choice is final: it is
     /// never overwritten by a later, better-informed ranking, and never re-derived at commit.
     chosen: bool,
+    /// The engine answered from its fast path because the typing deadline arrived first, so this
+    /// list may not be the one the full ranking would give.
+    partial: bool,
     /// Recently committed words, oldest first.
     context: Vec<String>,
     engine: Engine,
@@ -52,6 +55,7 @@ impl State {
             candidates: Vec::new(),
             cursor: 0,
             chosen: false,
+            partial: false,
             context: Vec::new(),
             engine: Engine::new(port),
         }
@@ -63,6 +67,7 @@ impl State {
         self.candidates.clear();
         self.cursor = 0;
         self.chosen = false;
+        self.partial = false;
     }
 
     fn remember(&mut self, word: &str) {
@@ -249,6 +254,7 @@ impl TextService_Impl {
             return Ok(());
         }
         if let Some(index) = digit_pick(vk) {
+            self.settle(ctx);
             let picked = self.state.borrow().candidates.get(index).cloned();
             return match picked {
                 Some(word) => self.commit(ctx, index, word, ""),
@@ -285,6 +291,7 @@ impl TextService_Impl {
                 self.commit_current(ctx, trailing)
             }
             VK_RIGHT | VK_DOWN => {
+                self.settle(ctx);
                 {
                     let mut s = self.state.borrow_mut();
                     if !s.candidates.is_empty() {
@@ -296,6 +303,7 @@ impl TextService_Impl {
                 Ok(())
             }
             VK_LEFT | VK_UP => {
+                self.settle(ctx);
                 {
                     let mut s = self.state.borrow_mut();
                     if !s.candidates.is_empty() {
@@ -347,11 +355,33 @@ impl TextService_Impl {
         let buffer = s.buffer.clone();
         let context = s.context.clone();
         match s.engine.suggest(&buffer, &context, wanted, deadline_ms) {
-            Some(reply) => s.candidates = reply.candidates,
-            None => s.candidates.clear(),
+            Some(reply) => {
+                s.candidates = reply.candidates;
+                s.partial = reply.partial;
+            }
+            None => {
+                s.candidates.clear();
+                s.partial = false;
+            }
         }
         s.cursor = 0;
         s.chosen = false;
+    }
+
+    /// Replace a fast-path list with the full ranking before the person picks from it.
+    ///
+    /// The list shown while typing is whatever the engine had within the typing deadline, and for
+    /// some words that is not the list the model would give: "chiro" shows ছাড়া while the full
+    /// ranking puts চিরো first. Committing with Space already re-asks, so the committed word was
+    /// always the better one -- but reaching for an arrow key or a number means choosing from what
+    /// is on screen, and that has to be the same list. Settling costs the time of one full query,
+    /// paid once, at the moment someone has stopped typing to look.
+    fn settle(&self, ctx: &ITfContext) {
+        if !self.state.borrow().partial {
+            return;
+        }
+        self.ask(COMMIT_DEADLINE_MS);
+        self.update_window(ctx);
     }
 
     /// Start the composition if there is none, then set its text to the buffer.

@@ -15,3 +15,6 @@
 {"roman": "khacchi", "gold": ["খাচ্ছি"], "tags": ["feedback"]}
 {"roman": "khaitecho", "gold": ["খাইতেছো"], "tags": ["feedback", "dialect"]}
 {"roman": "khaitechi", "gold": ["খাইতেছি"], "tags": ["feedback", "dialect"]}
+{"roman": "chiro", "gold": ["চিরো"], "tags": ["feedback"], "note": "2026-09-17 rust shell: fast path shows ছাড়া, full ranking is right"}
+{"roman": "chirodin", "gold": ["চিরদিন"], "tags": ["feedback"]}
+{"roman": "bajay", "gold": ["বাজায়"], "tags": ["feedback"], "note": "2026-09-17: not in the top five at all; বাজে ranked first"}
