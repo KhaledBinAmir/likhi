@@ -268,6 +268,36 @@ def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1") -> None:
             telemetry.flush()
 
 
+def _config_paths() -> list[Path]:
+    """Every place the shell's config.json may live, most specific first.
+
+    The packaged layout is <app>\\runtime\\python\\Lib\\site-packages\\likhi for this module and
+    <app>\\pime\\python\\input_methods\\likhi\\config.json for the config, so a path relative to
+    this file is what an installed engine actually needs; the launcher also sets LIKHI_CONFIG.
+    Missing that was a silent failure: telemetry simply stayed off on every fresh install.
+    """
+    paths: list[Path] = []
+    explicit = os.environ.get("LIKHI_CONFIG")
+    if explicit:
+        paths.append(Path(explicit))
+    here = Path(__file__).resolve()
+    for up in (5, 3):  # packaged runtime, then a plain checkout
+        if len(here.parents) > up:
+            paths.append(
+                here.parents[up] / "pime" / "python" / "input_methods" / "likhi" / "config.json"
+            )
+    paths.append(
+        Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"))
+        / "PIME"
+        / "python"
+        / "input_methods"
+        / "likhi"
+        / "config.json"
+    )
+    paths.append(Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "Likhi" / "config.json")
+    return paths
+
+
 def _telemetry_config() -> dict:
     """mode (off/metrics/full), drop folder, HTTPS endpoint, shared key.
 
@@ -283,15 +313,7 @@ def _telemetry_config() -> dict:
             "key": os.environ.get("LIKHI_TELEMETRY_KEY") or None,
             "sync_seconds": float(os.environ.get("LIKHI_TELEMETRY_SYNC_S") or 900),
         }
-    for path in (
-        Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"))
-        / "PIME"
-        / "python"
-        / "input_methods"
-        / "likhi"
-        / "config.json",
-        Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "Likhi" / "config.json",
-    ):
+    for path in _config_paths():
         try:
             if path.exists():
                 # utf-8-sig: administrators edit this file, and Notepad writes a byte-order mark
