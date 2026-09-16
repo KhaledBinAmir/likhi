@@ -151,7 +151,22 @@ try {
     } else { Write-Host "  none in the last 7 days" }
 } catch { Write-Host "  could not read the Application log: $($_.Exception.Message)" }
 
-Section "9. Installer logs"
+Section "9. Pending restart"
+# Setup refuses to run while Windows has a file rename queued for our files, reporting only that
+# "the installation/removal of a previous program was not completed", which tells nobody what to do.
+# The answer is always: restart, then run Setup again.
+$pfro = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name PendingFileRenameOperations -ErrorAction SilentlyContinue).PendingFileRenameOperations
+$ours = @($pfro | Where-Object { $_ -match 'PIME|Likhi' })
+if ($ours.Count -gt 0) {
+    Write-Host "  RESTART NEEDED before installing again. Queued for the next boot:"
+    $ours | ForEach-Object { Write-Host "    $_" }
+} elseif ($pfro) {
+    Write-Host "  none of ours ($(@($pfro | Where-Object { $_ }).Count) unrelated entries queued by other software)"
+} else {
+    Write-Host "  nothing queued"
+}
+
+Section "10. Installer logs"
 # The copy under the install directory is the one that survives; %TEMP% is cleaned by Windows, and
 # when Setup was elevated with a different admin account its log is in that account's TEMP, not this
 # user's. Send Setup.log alongside this report.

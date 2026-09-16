@@ -21,14 +21,18 @@ import socket
 
 from keycodes import (  # provided by PIME
     VK_BACK,
+    VK_CAPITAL,
     VK_CONTROL,
     VK_DOWN,
     VK_ESCAPE,
     VK_F1,
     VK_LEFT,
     VK_MENU,
+    VK_OEM_COMMA,
+    VK_OEM_PERIOD,
     VK_RETURN,
     VK_RIGHT,
+    VK_SHIFT,
     VK_SPACE,
     VK_UP,
 )
@@ -36,6 +40,41 @@ from textService import TextService  # provided by PIME
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ID_TOGGLE = 1
+
+
+def _roman_char(keyEvent):
+    """The roman character a key stands for, whatever keyboard layout sits underneath us.
+
+    charCode is what the *active layout* produced, and a text service sits on top of one. Windows
+    attaches Bengali INSCRIPT to bn-BD by default, and INSCRIPT maps the letter keys straight onto
+    Bangla letters -- so 'a' arrives as U+0986, fails an ASCII test, we decline the key, PIME passes
+    it to the application, and the user sees raw INSCRIPT output. Two pilot machines reported this
+    as "Likhi types random Bangla"; it only worked on the development machine because its bn-BD
+    layout happened to be substituted with US English.
+
+    A phonetic keyboard has to read the physical key. Virtual key codes for the letters are
+    0x41..0x5A, the same values as ASCII 'A'..'Z', and are assigned from the key's position, so they
+    survive any layout. The real character still wins whenever it is already ASCII, which keeps
+    every Latin layout behaving exactly as before, including the ones where the letters are not
+    where a US keyboard puts them.
+    """
+    if keyEvent.isChar():
+        ch = chr(keyEvent.charCode)
+        if ch.isascii() and ch.isprintable():
+            return ch
+    kc = keyEvent.keyCode
+    shifted = keyEvent.isKeyDown(VK_SHIFT)
+    if 0x41 <= kc <= 0x5A:  # VK_A .. VK_Z; keycodes.py does not name these
+        upper = shifted != keyEvent.isKeyToggled(VK_CAPITAL)
+        return chr(kc) if upper else chr(kc + 32)
+    if not shifted:
+        if 0x30 <= kc <= 0x39:  # VK_0 .. VK_9, the digit row
+            return chr(kc)
+        if kc == VK_OEM_PERIOD:
+            return "."
+        if kc == VK_OEM_COMMA:
+            return ","
+    return ""
 
 
 def _foreground_app():
@@ -213,9 +252,9 @@ class LikhiTextService(TextService):
             return True  # while composing we look at every key
         if keyEvent.isKeyDown(VK_CONTROL) or keyEvent.isKeyDown(VK_MENU):
             return False
-        if keyEvent.isChar():
-            ch = chr(keyEvent.charCode)
-            if ch.isascii() and ch.isalpha():
+        ch = _roman_char(keyEvent)
+        if ch:
+            if ch.isalpha():
                 return True
             if ch.isdigit() and self.cfg.get("bangla_digits", True):
                 return True
@@ -225,10 +264,10 @@ class LikhiTextService(TextService):
 
     def onKeyDown(self, keyEvent):
         kc = keyEvent.keyCode
-        ch = chr(keyEvent.charCode) if keyEvent.isChar() else ""
+        ch = _roman_char(keyEvent)
 
         if not self.buf:
-            if ch and ch.isascii() and ch.isalpha():
+            if ch and ch.isalpha():
                 self.buf = ch
                 self._refresh()
                 return True
@@ -265,7 +304,7 @@ class LikhiTextService(TextService):
             if idx < len(self.cands):
                 self._commit(self.cands[idx], "")
             return True
-        if ch and ch.isascii() and ch.isalpha():
+        if ch and ch.isalpha():
             self.buf += ch
             self._refresh()
             return True
