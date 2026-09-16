@@ -283,35 +283,24 @@ namespace Likhi
             return found;
         }
 
-        /// <summary>Whether Bangla has been pointed at a chosen font everywhere on this machine.
-        /// The backup file exists only while that is in force, so it is the honest test.</summary>
-        public static bool SystemFontApplied()
-        {
-            return File.Exists(Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                @"Likhi\system-font-backup.json"));
-        }
-
-        /// <summary>Apply or undo the machine-wide setting. Raises a UAC prompt: it is machine-wide,
-        /// so it cannot be done from this window's own rights, and should not be.</summary>
-        public static bool SetSystemFont(string family, bool apply)
-        {
-            string script = Path.Combine(AppDir, "system_font.ps1");
-            if (!File.Exists(script)) return false;
-            string args = "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\" " +
-                (apply ? "-Apply \"" + family + "\"" : "-Restore");
-            try
-            {
-                var psi = new ProcessStartInfo("powershell.exe", args);
-                psi.Verb = "runas";
-                psi.UseShellExecute = true;
-                psi.WindowStyle = ProcessWindowStyle.Hidden;
-                Process p = Process.Start(psi);
-                p.WaitForExit();
-                return p.ExitCode == 0;
-            }
-            catch { return false; }   // the person declined the prompt, which is an answer
-        }
+        // There was a setting here to point Bangla at a chosen font across the whole machine. It is
+        // gone because it did not work, and a switch that does nothing is worse than no switch.
+        //
+        // Windows has no "Bangla font" to change. An application asks for Segoe UI, that font has no
+        // Bengali glyphs -- confirmed, it has no glyph for আ -- and something else supplies them.
+        // The mechanism for choosing that something is font linking, under
+        // HKLM\...\FontLink\SystemLink, and it is a GDI mechanism. Modern applications draw through
+        // DirectWrite, which picks a fallback family itself and never reads those keys. Measured
+        // rather than assumed: with the entries in place and the font correctly installed
+        // machine-wide, Bangla under Segoe UI still rendered at Nirmala UI's exact metrics.
+        //
+        // The only thing that would actually work is replacing the system font file itself, which
+        // means taking ownership of a Windows font, breaking servicing, and breaking the nine other
+        // Indic scripts Nirmala UI carries. Not worth having.
+        //
+        // What does work is per-application: browsers and Office both let you choose a font per
+        // script. installer/system_font.ps1 is kept, with its findings, for anyone who wants to
+        // try the GDI path on older software.
 
         static bool Known(string name)
         {
@@ -356,7 +345,7 @@ namespace Likhi
     {
         readonly bool dark = IsDarkTheme();
         Label statusKeyboard, statusEngine;
-        CheckBox autostart, reporting, systemFont;
+        CheckBox autostart, reporting;
         TextBox tryHere;
         ComboBox fontBox, sizeBox;
         // Set while the window writes its own controls. Without it, showing the current state fires
@@ -394,7 +383,7 @@ namespace Likhi
             // had chosen into the settings file before the window was even on screen.
             loading = true;
             Text = "Likhi";
-            ClientSize = new Size(520, 630);
+            ClientSize = new Size(520, 600);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
@@ -437,10 +426,9 @@ namespace Likhi
             foreach (int s in new[] { 12, 13, 14, 16, 18, 20, 24 }) sizeBox.Items.Add(s.ToString());
             Controls.Add(sizeBox);
             Body("px", 428, y + 4, Dim, "Segoe UI", 18);
-            y += 32;
-            systemFont = Check("Use this font for Bangla in all apps", 18, y); y += 22;
-            Body("Changes what Bangla looks like everywhere, not just here. Reversible.", 40, y, Dim, "Segoe UI", 18);
             y += 30;
+            Body("Applies to the suggestion list. Windows chooses the font for Bangla elsewhere.", 18, y, Dim, "Segoe UI", 18);
+            y += 26;
 
             Head("Try it here", 11f, Fg, 18, y); y += 26;
             tryHere = new TextBox();
@@ -492,27 +480,6 @@ namespace Likhi
                 Env.SetSetting("font_size", sizeBox.SelectedItem.ToString());
                 PreviewFont();
             };
-            systemFont.CheckedChanged += delegate
-            {
-                if (loading) return;
-                string family = fontBox.SelectedItem as string;
-                bool wanted = systemFont.Checked;
-                if (wanted && string.IsNullOrEmpty(family)) { systemFont.Checked = false; return; }
-                if (!Env.SetSystemFont(family, wanted))
-                {
-                    // Declined the prompt, or the script failed: put the box back rather than
-                    // leaving it claiming something that did not happen.
-                    loading = true;
-                    systemFont.Checked = !wanted;
-                    loading = false;
-                    return;
-                }
-                MessageBox.Show(this,
-                    wanted
-                        ? "Bangla will use " + family + " everywhere.\n\nApplications read this when they start, so restart the ones you have open."
-                        : "Bangla is back to the system font everywhere.\n\nRestart open applications to see it.",
-                    "Likhi", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            };
 
             Refresh2();
             // Construction is over: from here a change really is someone clicking.
@@ -560,7 +527,6 @@ namespace Likhi
             string size = Env.Setting("font_size", "14");
             if (!sizeBox.Items.Contains(size)) size = "14";
             sizeBox.SelectedItem = size;
-            systemFont.Checked = Env.SystemFontApplied();
             PreviewFont();
         }
 
