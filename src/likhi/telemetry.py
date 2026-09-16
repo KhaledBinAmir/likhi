@@ -234,11 +234,23 @@ class Telemetry:
         advanced and the next attempt sends exactly the same bytes under the same sequence number.
 
         Runs on a background thread only. Never call it from a keystroke path.
+
+        The offset is a single position per stream, not one per destination, because the configured
+        destinations are always shipped together in the loop below. That makes an ad-hoc sync to
+        somewhere else -- a debug drop folder, a second endpoint -- silently destructive: it would
+        advance the offset and those bytes would never reach the real destination. So a call that
+        overrides the configuration does not record its progress, and repeating it re-sends the same
+        bytes. Sequence numbers still come from the recorded state, so an ad-hoc copy lands under
+        names the real destination will use later; that is fine for inspection, which is all an
+        override is for.
         """
         target = Path(drop) if drop else self.drop
         url = endpoint or self.endpoint
         if not target and not url:
             return {"sent": 0, "error": "no drop folder or endpoint configured"}
+        ad_hoc = (drop is not None and Path(drop) != self.drop) or (
+            endpoint is not None and endpoint != self.endpoint
+        )
         state_path = self.dir / "sync_state.json"
         try:
             state = (
@@ -278,15 +290,18 @@ class Telemetry:
                 except Exception as e:
                     errors.append(f"{stream}: {type(e).__name__}: {e}")
                     break
-        try:
-            state_path.write_text(json.dumps(state), encoding="utf-8")
-        except Exception:
-            pass
+        if not ad_hoc:
+            try:
+                state_path.write_text(json.dumps(state), encoding="utf-8")
+            except Exception:
+                pass
         out: dict = {"sent": sent}
         if target:
             out["drop"] = str(target)
         if url:
             out["endpoint"] = url
+        if ad_hoc:
+            out["ad_hoc"] = True
         if errors:
             out["error"] = "; ".join(errors)
         return out

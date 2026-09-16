@@ -254,6 +254,13 @@ def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1") -> None:
         interval = float(cfg["sync_seconds"])
 
         def _flusher() -> None:
+            # One early round, then the steady interval. Waiting a full interval for the first
+            # upload means a new install is invisible for that long, so there is no way to tell a
+            # working installation from a silently disabled one; worse, a machine switched off
+            # before the first tick never reports at all, which is the normal life of an office PC.
+            # The early round is cheap because sync sends only bytes written since last time.
+            if not stop.wait(min(60.0, interval)):
+                telemetry.flush()
             while not stop.wait(interval):
                 telemetry.flush()
 
