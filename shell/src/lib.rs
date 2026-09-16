@@ -7,6 +7,8 @@
 //! the PIME shell used, so the engine did not have to change for the shell to.
 
 mod candidates;
+mod config;
+mod display;
 mod edit;
 mod engine;
 mod guids;
