@@ -7,6 +7,12 @@
 ; rights once and leaves the user with a working Bangla keyboard and nothing to configure.
 
 #define AppName "Likhi"
+; 0.1.10: candidate window font down to 14px from 16. Font family, pixel size and how many
+;        candidates share a row are the only parts of that window an input method can change --
+;        PIME's customizeUI takes candFontName, candFontSize, candPerRow and candUseCursor, and
+;        nothing else. Its colours come from GetSysColor inside the text service DLL, so a dark
+;        theme, rounded corners or any other restyling needs a different candidate window, not a
+;        setting. font_size in config.json is a live knob: edit it and restart the launcher.
 ; 0.1.9: the text service now reads the physical key rather than the character the keyboard layout
 ;        underneath it produced. A text service sits on top of a layout, and Windows attaches
 ;        Bengali INSCRIPT to bn-BD, which maps the letter keys straight onto Bangla letters -- so
@@ -54,7 +60,7 @@
 ;        running engine with PowerShell rather than WMIC, which Windows 11 no longer ships.
 ; 0.1.1: the engine did not look for the shell's config.json in the installed layout, so a fresh
 ;        install never reported telemetry.
-#define AppVersion "0.1.9"
+#define AppVersion "0.1.10"
 #define AppPublisher "Khaled Bin Amir"
 #define AppURL "https://github.com/KhaledBinAmir/likhi"
 #define PimeSource "C:\Program Files (x86)\PIME"
