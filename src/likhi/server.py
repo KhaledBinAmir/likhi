@@ -301,8 +301,28 @@ def _config_paths() -> list[Path]:
         / "likhi"
         / "config.json"
     )
-    paths.append(Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "Likhi" / "config.json")
+    paths.append(_user_config_path())
     return paths
+
+
+def _user_config_path() -> Path:
+    """Where this user's own settings live, written by the Likhi window.
+
+    Per user and not under Program Files on purpose: a standard user cannot write there, and each
+    person on a shared machine gets their own answer.
+    """
+    return Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "Likhi" / "config.json"
+
+
+def _user_overrides() -> dict | None:
+    """The per-user settings file, or None when it is absent or unreadable."""
+    path = _user_config_path()
+    try:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        pass
+    return None
 
 
 def _telemetry_config() -> dict:
@@ -326,6 +346,14 @@ def _telemetry_config() -> dict:
                 # utf-8-sig: administrators edit this file, and Notepad writes a byte-order mark
                 # that plain utf-8 parsing rejects, which would silently disable telemetry.
                 cfg = json.loads(path.read_text(encoding="utf-8-sig"))
+                # A person's own choice overrides the machine default, and only the keys they set.
+                # The installed config carries the endpoint and the shared key, which a per-user
+                # file has no business restating, so this merges rather than replaces: turning
+                # reporting off in the Likhi window must not also erase where reports would go if
+                # it were turned back on. Skipped when this *is* the per-user file.
+                user = _user_overrides()
+                if user is not None and path != _user_config_path():
+                    cfg = {**cfg, **user}
                 return {
                     "mode": str(cfg.get("telemetry", "off")).lower(),
                     "drop": cfg.get("telemetry_drop") or None,
