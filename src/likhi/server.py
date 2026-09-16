@@ -269,7 +269,9 @@ def _telemetry_config() -> dict:
     ):
         try:
             if path.exists():
-                cfg = json.loads(path.read_text(encoding="utf-8"))
+                # utf-8-sig: administrators edit this file, and Notepad writes a byte-order mark
+                # that plain utf-8 parsing rejects, which would silently disable telemetry.
+                cfg = json.loads(path.read_text(encoding="utf-8-sig"))
                 return {
                     "mode": str(cfg.get("telemetry", "off")).lower(),
                     "drop": cfg.get("telemetry_drop") or None,
