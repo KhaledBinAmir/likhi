@@ -1,4 +1,4 @@
-; Likhi installer. Build with:
+﻿; Likhi installer. Build with:
 ;   python scripts/build_runtime.py
 ;   python scripts/build_client.py
 ;   "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer\likhi.iss
@@ -7,6 +7,17 @@
 ; rights once and leaves the user with a working Bangla keyboard and nothing to configure.
 
 #define AppName "Likhi"
+; 0.1.7: an upgrade no longer demands a restart. The PIME text service DLLs were marked
+;        ignoreversion, so every upgrade rewrote a byte-identical file that is mapped into every
+;        running application; it could not be replaced, Inno scheduled it for the next boot, and
+;        Setup asked the user to restart. Worse, a second install before that restart is refused
+;        outright with "the installation of a previous program was not completed". Inno's normal
+;        version check now skips those files when they already match.
+; 0.1.6: installing no longer changes which input method you start in. Earlier versions forced the
+;        default to Likhi, so every new window opened in Bangla and English needed a deliberate
+;        switch in each application, which is the opposite of what a second keyboard should do.
+;        Whatever the person has chosen in Settings is now left alone; Likhi is what you switch to
+;        with Win+Space. Pass -MakeLikhiDefault to enable_keyboard.ps1 for the old behaviour.
 ; 0.1.5: the two reasons the keyboard never appeared on a colleague's machine.
 ;        (1) PIMETextService.dll enumerates the input methods to register from a path it builds
 ;            internally, %ProgramFiles(x86)%\PIME\python\input_methods, ignoring both its own
@@ -27,7 +38,7 @@
 ;        running engine with PowerShell rather than WMIC, which Windows 11 no longer ships.
 ; 0.1.1: the engine did not look for the shell's config.json in the installed layout, so a fresh
 ;        install never reported telemetry.
-#define AppVersion "0.1.5"
+#define AppVersion "0.1.7"
 #define AppPublisher "Khaled Bin Amir"
 #define AppURL "https://github.com/KhaledBinAmir/likhi"
 #define PimeSource "C:\Program Files (x86)\PIME"
@@ -86,10 +97,15 @@ Source: "..\dist\runtime\*"; DestDir: "{app}\runtime"; Flags: ignoreversion recu
 Source: "{#PimeSource}\PIMELauncher.exe"; DestDir: "{#PimeDir}"; Flags: ignoreversion restartreplace
 Source: "{#PimeSource}\backends.json"; DestDir: "{#PimeDir}"; Flags: ignoreversion
 Source: "{#PimeSource}\version.txt"; DestDir: "{#PimeDir}"; Flags: ignoreversion
-; restartreplace: this DLL lives inside every running application that has had focus, so an upgrade
-; must not fail when it cannot be overwritten. It is identical between Likhi releases.
-Source: "{#PimeSource}\x64\*"; DestDir: "{#PimeDir}\x64"; Flags: ignoreversion recursesubdirs restartreplace uninsrestartdelete
-Source: "{#PimeSource}\x86\*"; DestDir: "{#PimeDir}\x86"; Flags: ignoreversion recursesubdirs restartreplace uninsrestartdelete
+; No ignoreversion here, unlike everything else we ship. These DLLs live inside every running
+; application that has had keyboard focus. Forcing an overwrite means the file is locked, Inno
+; schedules the replacement for the next boot, and Setup then tells the user to restart -- on every
+; single upgrade, to install a byte-identical file. Inno's normal version check skips them when they
+; already match, so an upgrade touches nothing that is in use and needs no restart, while a genuinely
+; newer PIME would still be installed. restartreplace remains as the fallback for the first install
+; on a machine that already had PIME running.
+Source: "{#PimeSource}\x64\*"; DestDir: "{#PimeDir}\x64"; Flags: recursesubdirs restartreplace uninsrestartdelete
+Source: "{#PimeSource}\x86\*"; DestDir: "{#PimeDir}\x86"; Flags: recursesubdirs restartreplace uninsrestartdelete
 ; PIME's Python backend host, without the input methods we do not ship.
 Source: "{#PimeSource}\python\*"; DestDir: "{#PimeDir}\python"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "input_methods\*,__pycache__"
 Source: "{#PimeSource}\python\input_methods\*.py"; DestDir: "{#PimeDir}\python\input_methods"; Flags: ignoreversion skipifsourcedoesntexist

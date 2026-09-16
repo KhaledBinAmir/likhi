@@ -1,12 +1,19 @@
 <#
 .SYNOPSIS
-  Add the Likhi keyboard to the current user's language list, and optionally make it the default.
+  Add the Likhi keyboard to the current user's language list, changing nothing else.
 
   Run per user, not per machine: Windows stores input methods in the user profile, so a
   machine-wide install still needs this once for each person who will type Bangla.
+
+  Whichever input method the person starts in is left exactly as they have it in Settings.
+  Pass -MakeLikhiDefault to start every window in Bangla instead.
 #>
 param(
-    [switch]$SetDefault = $true,
+    # Off by default, and deliberately so. Windows starts every new window in the default input
+    # method, so making Likhi the default means English needs a deliberate switch in every
+    # application -- the opposite of what anyone expects from a second keyboard. A Bangla keyboard
+    # should be there when you reach for it, not in the way when you do not.
+    [switch]$MakeLikhiDefault,
     [string]$InstallDir = (Split-Path -Parent $PSCommandPath),
     # PIME lives here and nowhere else: PIMETextService.dll builds this path internally when it
     # registers its input methods, ignoring both its own location and HKLM\SOFTWARE\PIME.
@@ -33,10 +40,14 @@ if ($bn.InputMethodTips -notcontains $tip) {
 }
 Set-WinUserLanguageList $list -Force
 
-if ($SetDefault) {
-    # Without this, Windows resets the input method per application window.
+if ($MakeLikhiDefault) {
     Set-WinDefaultInputMethodOverride -InputTip $tip
     Write-Host "Likhi is now the default input method"
+} else {
+    # Nothing. Installing a keyboard is not a reason to change which one someone starts in, and
+    # whatever they have chosen in Settings is a decision we have no business overwriting. Earlier
+    # versions forced the default to Likhi here, which is how Bangla ended up in every new window.
+    Write-Host "default input method left as you have it; press Win+Space for Likhi"
 }
 
 # Start at sign-in, per user. Each person gets their own engine process and therefore their own
