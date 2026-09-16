@@ -1,0 +1,49 @@
+[package]
+name = "likhi-tsf"
+version = "0.1.0"
+edition = "2021"
+description = "Likhi text service: a Windows Text Services Framework keyboard that speaks to the Likhi engine"
+license = "MIT"
+publish = false
+
+# A COM in-process server. cdylib gives a plain DLL with C-callable exports and no Rust metadata,
+# which is what regsvr32 and the Text Services Framework expect to load into every application.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Microsoft's own Win32 / COM bindings. The `implement` macro (from windows-core, re-exported as
+# windows::core::implement) generates the COM vtables for our text service, which is the boilerplate
+# that makes hand-written C++ TSF code so long.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_Security",
+    "Win32_System_SystemServices",
+    "Win32_System_Variant",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_UI_TextServices",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_UI_HiDpi",
+] }
+windows-core = "0.62"
+# The engine protocol is JSON lines over a local TCP socket, unchanged from the PIME shell, so the
+# Python engine keeps working without modification while the shell is replaced underneath it.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"     # size over speed: this sits in every process; the work is in the engine
+lto = true
+codegen-units = 1
+panic = "abort"     # a panic must never unwind across the COM boundary into a host application
+strip = true
