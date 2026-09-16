@@ -1,4 +1,4 @@
-{
+﻿{
 	"server_host": "127.0.0.1",
 	"server_port": 47123,
 	"server_timeout_ms": 600,
@@ -11,7 +11,7 @@
 	"space_commits": true,
 	"enter_commits": true,
 	"font_name": "Nirmala UI",
-	"font_size": 16,
+	"font_size": 14,
 
 	"//": "Pilot example. Copy over config.json on each tester's machine and fill in the endpoint and key.",
 	"telemetry": "full",

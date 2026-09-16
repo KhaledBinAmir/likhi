@@ -1,4 +1,4 @@
-{
+﻿{
 	"server_host": "127.0.0.1",
 	"server_port": 47123,
 	"server_timeout_ms": 600,
@@ -10,8 +10,9 @@
 	"danda_for_period": true,
 	"space_commits": true,
 	"enter_commits": true,
+	"//font": "The candidate window's font family and pixel size. These, and how many candidates fit on a row, are the only parts of that window PIME lets an input method change: its colours come from GetSysColor inside the text service DLL and are not exposed. Nirmala UI ships with every Windows 10 and 11, so it is always present; Nirmala Text is the same family's reading face if you prefer looser letterforms.",
 	"font_name": "Nirmala UI",
-	"font_size": 16,
+	"font_size": 14,
 
 	"//telemetry": "off = nothing recorded (default). metrics = counters only, no text. full = counters + struggle words (typed string, chosen word, what we ranked first) ONLY when the first suggestion was not taken.",
 	"telemetry": "off",
