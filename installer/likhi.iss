@@ -7,6 +7,18 @@
 ; rights once and leaves the user with a working Bangla keyboard and nothing to configure.
 
 #define AppName "Likhi"
+; 0.1.5: the two reasons the keyboard never appeared on a colleague's machine.
+;        (1) PIMETextService.dll enumerates the input methods to register from a path it builds
+;            internally, %ProgramFiles(x86)%\PIME\python\input_methods, ignoring both its own
+;            location and HKLM\SOFTWARE\PIME. Installing PIME under {app} therefore registered
+;            nothing at all. Proven by registering the DLL from C:\Program Files\Likhi\pime, with
+;            the registry key pointing there too, and watching it pick up a probe input method that
+;            existed only under the hardcoded path. This worked on the developer's machine solely
+;            because standalone PIME had been installed there years earlier.
+;        (2) the profile check compared against a key name beginning '{{', because `{{` is the
+;            escape for Inno constant expansion and does not apply inside a Pascal string literal.
+;            The check could never pass, and it gated the per-user keyboard setup, so 0.1.2 reported
+;            a failure that had not happened and then skipped the step that adds the keyboard.
 ; 0.1.3: keep the setup log. Inno writes it to %TEMP%, where Windows deletes it long before anyone
 ;        asks what went wrong, so every install now copies it to {app}\Setup.log, and a failed
 ;        install also drops it on the user's Desktop next to the diagnostics report.
@@ -15,10 +27,16 @@
 ;        running engine with PowerShell rather than WMIC, which Windows 11 no longer ships.
 ; 0.1.1: the engine did not look for the shell's config.json in the installed layout, so a fresh
 ;        install never reported telemetry.
-#define AppVersion "0.1.3"
+#define AppVersion "0.1.5"
 #define AppPublisher "Khaled Bin Amir"
 #define AppURL "https://github.com/KhaledBinAmir/likhi"
 #define PimeSource "C:\Program Files (x86)\PIME"
+; Where PIME must be installed, which is not negotiable: PIMETextService.dll builds this path
+; internally and enumerates <PimeDir>\python\input_methods\*\ime.json there when regsvr32 calls
+; DllRegisterServer. It ignores its own location and it ignores HKLM\SOFTWARE\PIME. Proven by
+; registering the DLL from C:\Program Files\Likhi\pime with the registry key pointing at that same
+; directory, and watching it register a probe input method that existed only under the path below.
+#define PimeDir "{commonpf32}\PIME"
 
 [Setup]
 AppId={{7F2E5B91-4C3A-4D8E-9A61-2B7D5E8C4F30}
@@ -57,18 +75,26 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; The engine: embedded Python, NumPy, the Likhi package, the model and the lexicon.
 Source: "..\dist\runtime\*"; DestDir: "{app}\runtime"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; PIME: the Text Services Framework host. Unmodified, LGPL-2.1, see THIRD-PARTY.md.
-Source: "{#PimeSource}\PIMELauncher.exe"; DestDir: "{app}\pime"; Flags: ignoreversion restartreplace
-Source: "{#PimeSource}\backends.json"; DestDir: "{app}\pime"; Flags: ignoreversion
-Source: "{#PimeSource}\version.txt"; DestDir: "{app}\pime"; Flags: ignoreversion
+;
+; Installed to {#PimeDir} rather than under {app}, because the DLL only ever looks there -- see the
+; note beside the PimeDir definition. Until 0.1.4 this went to {app}\pime, regsvr32 found no input
+; methods to register, no language profile was written, and the keyboard never appeared for anyone
+; who had not previously installed PIME by hand.
+;
+; Inno removes only the files it installed and only removes a directory once it is empty, so sharing
+; this directory with an existing standalone PIME installation is safe in both directions.
+Source: "{#PimeSource}\PIMELauncher.exe"; DestDir: "{#PimeDir}"; Flags: ignoreversion restartreplace
+Source: "{#PimeSource}\backends.json"; DestDir: "{#PimeDir}"; Flags: ignoreversion
+Source: "{#PimeSource}\version.txt"; DestDir: "{#PimeDir}"; Flags: ignoreversion
 ; restartreplace: this DLL lives inside every running application that has had focus, so an upgrade
 ; must not fail when it cannot be overwritten. It is identical between Likhi releases.
-Source: "{#PimeSource}\x64\*"; DestDir: "{app}\pime\x64"; Flags: ignoreversion recursesubdirs restartreplace uninsrestartdelete
-Source: "{#PimeSource}\x86\*"; DestDir: "{app}\pime\x86"; Flags: ignoreversion recursesubdirs restartreplace uninsrestartdelete
+Source: "{#PimeSource}\x64\*"; DestDir: "{#PimeDir}\x64"; Flags: ignoreversion recursesubdirs restartreplace uninsrestartdelete
+Source: "{#PimeSource}\x86\*"; DestDir: "{#PimeDir}\x86"; Flags: ignoreversion recursesubdirs restartreplace uninsrestartdelete
 ; PIME's Python backend host, without the input methods we do not ship.
-Source: "{#PimeSource}\python\*"; DestDir: "{app}\pime\python"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "input_methods\*,__pycache__"
-Source: "{#PimeSource}\python\input_methods\*.py"; DestDir: "{app}\pime\python\input_methods"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#PimeSource}\python\*"; DestDir: "{#PimeDir}\python"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "input_methods\*,__pycache__"
+Source: "{#PimeSource}\python\input_methods\*.py"; DestDir: "{#PimeDir}\python\input_methods"; Flags: ignoreversion skipifsourcedoesntexist
 ; Our text service, with the pilot keys already stamped in by scripts/build_client.py.
-Source: "..\dist\likhi\*"; DestDir: "{app}\pime\python\input_methods\likhi"; Flags: ignoreversion
+Source: "..\dist\likhi\*"; DestDir: "{#PimeDir}\python\input_methods\likhi"; Flags: ignoreversion
 ; Per-user keyboard setup and documentation.
 Source: "enable_keyboard.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "disable_keyboard.ps1"; DestDir: "{app}"; Flags: ignoreversion
@@ -76,10 +102,18 @@ Source: "diagnose.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\THIRD-PARTY.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
+[InstallDelete]
+; 0.1.4 and earlier put PIME under the application directory, where the text service could never
+; find it. Remove that copy so an upgraded machine is not left with a second, useless PIME. A DLL
+; that is still mapped into a running application cannot be deleted; Inno skips what it cannot
+; remove and carries on, which is what we want -- deleting a mapped image is how you crash every
+; program that has the keyboard loaded.
+Type: filesandordirs; Name: "{app}\pime"
+
 [Icons]
 Name: "{group}\Likhi on GitHub"; Filename: "{#AppURL}"
 ; Any other user of this machine runs this once to get the keyboard and their own engine.
-Name: "{group}\Set up the Likhi keyboard for this user"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\enable_keyboard.ps1"" -InstallDir ""{app}"""
+Name: "{group}\Set up the Likhi keyboard for this user"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\enable_keyboard.ps1"" -InstallDir ""{app}"" -PimeDir ""{#PimeDir}"""
 Name: "{group}\Diagnose Likhi"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\diagnose.ps1"""
 Name: "{group}\Uninstall Likhi"; Filename: "{uninstallexe}"
 
@@ -95,17 +129,29 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: 
 ; keyboard from the language list without an error, which is exactly how 0.1.1 failed quietly.
 
 [UninstallRun]
+; HKLM\SOFTWARE\PIME is deliberately left behind. It is PIME's own key, not ours; on a machine that
+; also has standalone PIME installed, deleting it would break that installation, and a value left
+; pointing at a removed directory is the milder of the two failures.
+;
 ; runasoriginaluser is a [Run]-only flag; the uninstaller already runs under the same user account,
 ; so HKCU (where the language list lives) is that user's hive.
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\disable_keyboard.ps1"""; Flags: waituntilterminated runhidden; RunOnceId: "RemoveKeyboard"
 Filename: "{sys}\taskkill.exe"; Parameters: "/f /im PIMELauncher.exe"; Flags: waituntilterminated runhidden; RunOnceId: "StopLauncher"
-Filename: "{sys}\regsvr32.exe"; Parameters: "/u /s ""{app}\pime\x64\PIMETextService.dll"""; Flags: waituntilterminated; RunOnceId: "UnregX64"
-Filename: "{syswow64}\regsvr32.exe"; Parameters: "/u /s ""{app}\pime\x86\PIMETextService.dll"""; Flags: waituntilterminated; RunOnceId: "UnregX86"
+Filename: "{sys}\regsvr32.exe"; Parameters: "/u /s ""{#PimeDir}\x64\PIMETextService.dll"""; Flags: waituntilterminated; RunOnceId: "UnregX64"
+Filename: "{syswow64}\regsvr32.exe"; Parameters: "/u /s ""{#PimeDir}\x86\PIMETextService.dll"""; Flags: waituntilterminated; RunOnceId: "UnregX86"
 
 [Code]
 const
-  TipClsid = '{{35F67E9D-A54D-4177-9697-8B0AB71A9E04}';
-  TipProfile = '{{9B4E7C21-3D5A-4F86-A2E1-6C0D8B7F5A13}';
+  { Single braces on purpose. A doubled brace is the escape for Inno *constant expansion*, which
+    applies to parameters in the file and run sections and to ExpandConstant -- never to a Pascal
+    string literal, which is taken verbatim. Writing the doubled form here produced a lookup for a
+    key name beginning with two braces, so the verification below could never pass, and 0.1.2 told
+    every user that registration had failed when it had in fact succeeded.
+    A section name in square brackets must not start a line in here either: Inno strips leading
+    whitespace before deciding whether a line opens a new section, comment or not. }
+  TipClsid = '{35F67E9D-A54D-4177-9697-8B0AB71A9E04}';
+  TipProfile = '{9B4E7C21-3D5A-4F86-A2E1-6C0D8B7F5A13}';
+  LangId = '0x00000845';
 
 function RunHidden(const Exe, Params: String; var Code: Integer): Boolean;
 begin
@@ -119,10 +165,14 @@ var
 begin
   { WMIC was removed from Windows 11, so an installer that relies on it silently fails to stop the
     running engine and then cannot overwrite its files. PowerShell is always present. Matching on
-    the install path leaves the user's other Python processes alone. }
+    the two install paths leaves the user's other Python processes alone; both are needed, because
+    the engine runs from the application directory and PIME's Python backend runs from the PIME one.
+    An Inno constant must never be written inside a comment like this: a Pascal comment ends at the
+    first closing brace, so the constant's own brace would cut the comment short. }
   Script := '-NoProfile -ExecutionPolicy Bypass -Command "' +
             'Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like ''' +
-            ExpandConstant('{app}') + '\*'' } | ForEach-Object { ' +
+            ExpandConstant('{app}') + '\*'' -or $_.ExecutablePath -like ''' +
+            ExpandConstant('{#PimeDir}') + '\*'' } | ForEach-Object { ' +
             'Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"';
   RunHidden('powershell.exe', Script, Code);
   RunHidden(ExpandConstant('{sys}\taskkill.exe'), '/f /im PIMELauncher.exe', Code);
@@ -132,11 +182,17 @@ end;
 function RegisterTextService(var Problem: String): Boolean;
 var
   Code64, Code32: Integer;
+  Desc: String;
 begin
+  { PIMELauncher reads this to find its own files. The DLL does not -- it uses a path it builds
+    internally -- so writing this does not help registration, but leaving it wrong would break the
+    launcher on a machine that once had PIME somewhere else. }
+  RegWriteStringValue(HKLM, 'SOFTWARE\PIME', '', ExpandConstant('{#PimeDir}'));
+
   RunHidden(ExpandConstant('{sys}\regsvr32.exe'),
-            '/s "' + ExpandConstant('{app}\pime\x64\PIMETextService.dll') + '"', Code64);
+            '/s "' + ExpandConstant('{#PimeDir}\x64\PIMETextService.dll') + '"', Code64);
   RunHidden(ExpandConstant('{syswow64}\regsvr32.exe'),
-            '/s "' + ExpandConstant('{app}\pime\x86\PIMETextService.dll') + '"', Code32);
+            '/s "' + ExpandConstant('{#PimeDir}\x86\PIMETextService.dll') + '"', Code32);
   if (Code64 <> 0) or (Code32 <> 0) then
   begin
     Problem := 'Registering the text service failed (64-bit code ' + IntToStr(Code64) +
@@ -144,10 +200,13 @@ begin
     Result := False;
     exit;
   end;
-  { regsvr32 can report success while writing no language profile, for example when it cannot read
-    ime.json. Verify what matters rather than trusting the exit code. }
-  if not RegKeyExists(HKLM64, 'SOFTWARE\Microsoft\CTF\TIP\' + TipClsid +
-                              '\LanguageProfile\0x00000845\' + TipProfile) then
+
+  { regsvr32 reports success whether or not it found an input method to register, so check that the
+    profile is really there. Reading Description rather than testing for the key alone: an empty key
+    left behind by an earlier attempt would satisfy RegKeyExists and tell us nothing. }
+  if not RegQueryStringValue(HKLM64, 'SOFTWARE\Microsoft\CTF\TIP\' + TipClsid +
+                             '\LanguageProfile\' + LangId + '\' + TipProfile, 'Description', Desc)
+     or (Desc = '') then
   begin
     Problem := 'The text service registered but no Bangla keyboard profile was created.';
     Result := False;
@@ -185,7 +244,8 @@ var
 begin
   ExecAsOriginalUser('powershell.exe',
     '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\enable_keyboard.ps1') +
-    '" -InstallDir "' + ExpandConstant('{app}') + '"',
+    '" -InstallDir "' + ExpandConstant('{app}') +
+    '" -PimeDir "' + ExpandConstant('{#PimeDir}') + '"',
     '', SW_HIDE, ewWaitUntilTerminated, Code);
   Sleep(500);
   Result := KeyboardPresentForUser();
@@ -200,28 +260,40 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Problem: String;
-  Failed: Boolean;
+  Code: Integer;
+  Registered, HasKeyboard, Failed: Boolean;
 begin
   { An upgrade must not leave the old engine holding its own files open. }
   if CurStep = ssInstall then
+  begin
     StopOurProcesses();
+    { Releases the CLSID from the 0.1.4-and-earlier location before that copy is deleted, so the
+      registration never points at a path that no longer exists. Harmless on a first install. }
+    if FileExists(ExpandConstant('{app}\pime\x64\PIMETextService.dll')) then
+    begin
+      RunHidden(ExpandConstant('{sys}\regsvr32.exe'),
+                '/u /s "' + ExpandConstant('{app}\pime\x64\PIMETextService.dll') + '"', Code);
+      RunHidden(ExpandConstant('{syswow64}\regsvr32.exe'),
+                '/u /s "' + ExpandConstant('{app}\pime\x86\PIMETextService.dll') + '"', Code);
+    end;
+  end;
 
   if CurStep = ssPostInstall then
   begin
-    Failed := False;
-    if not RegisterTextService(Problem) then
-    begin
-      Failed := True;
+    Registered := RegisterTextService(Problem);
+    { Attempted whether or not the check above passed. In 0.1.2 a faulty verification made this step
+      conditional, so a false negative -- not a real failure -- was the reason the keyboard never
+      reached anyone's language list. A verification exists to report, never to gate. }
+    HasKeyboard := SetUpKeyboardForUser();
+    Failed := (not HasKeyboard) or (not Registered);
+
+    if not Registered then
       MsgBox('Likhi was copied to your computer, but the keyboard could not be registered.' + #13#10#13#10 +
              Problem + #13#10#13#10 +
-             'The keyboard will not appear until this is fixed. Run "Diagnose Likhi" from the ' +
-             'Start menu and send the report it saves on your Desktop, together with ' +
-             'Likhi-setup-log.txt, to whoever gave you this installer.',
-             mbError, MB_OK);
-    end
-    else if not SetUpKeyboardForUser() then
-    begin
-      Failed := True;
+             'Run "Diagnose Likhi" from the Start menu and send the report it saves on your ' +
+             'Desktop, together with Likhi-setup-log.txt, to whoever gave you this installer.',
+             mbError, MB_OK)
+    else if not HasKeyboard then
       MsgBox('Likhi is installed and the keyboard is registered, but it could not be added to ' +
              'your language list automatically.' + #13#10#13#10 +
              'Open the Start menu and run "Set up the Likhi keyboard for this user", then press ' +
@@ -230,7 +302,7 @@ begin
              'report it saves on your Desktop, together with Likhi-setup-log.txt, to whoever gave ' +
              'you this installer.',
              mbInformation, MB_OK);
-    end;
+
     { Written last so it captures the checks above, and put on the Desktop only when something went
       wrong: nobody wants a log file on their Desktop after an install that worked. }
     SaveSetupLog(Failed);
