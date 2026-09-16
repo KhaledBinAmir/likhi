@@ -33,6 +33,9 @@ struct State {
     buffer: String,
     candidates: Vec<String>,
     cursor: usize,
+    /// True once the person has moved the highlight themselves. An explicit choice is final: it is
+    /// never overwritten by a later, better-informed ranking, and never re-derived at commit.
+    chosen: bool,
     /// Recently committed words, oldest first.
     context: Vec<String>,
     engine: Engine,
@@ -45,6 +48,7 @@ impl State {
             buffer: String::new(),
             candidates: Vec::new(),
             cursor: 0,
+            chosen: false,
             context: Vec::new(),
             engine: Engine::new(DEFAULT_PORT),
         }
@@ -55,6 +59,7 @@ impl State {
         self.buffer.clear();
         self.candidates.clear();
         self.cursor = 0;
+        self.chosen = false;
     }
 
     fn remember(&mut self, word: &str) {
@@ -127,6 +132,36 @@ fn digit_pick(vk: u32) -> Option<usize> {
     }
 }
 
+/// Punctuation typed while composing: it ends the word, so the highlighted candidate is committed
+/// and the mark follows it. Resolved from the virtual key rather than the layout, which is safe
+/// because the profile declares a US substitute layout.
+///
+/// A full stop becomes the Bengali daṛi. Bangla ends a sentence with a vertical stroke, and a
+/// keyboard that makes people reach for a character map to finish a sentence is not a Bangla
+/// keyboard. Every other mark is shared with Latin and passes through unchanged.
+fn punctuation(vk: u32) -> Option<&'static str> {
+    let shift = key_down(VK_SHIFT);
+    Some(match (vk, shift) {
+        (0xBC, false) => ",",
+        (0xBC, true) => "<",
+        (0xBE, false) => "\u{0964}", // ।
+        (0xBE, true) => ">",
+        (0xBA, false) => ";",
+        (0xBA, true) => ":",
+        (0xBF, false) => "/",
+        (0xBF, true) => "?",
+        (0xDE, false) => "'",
+        (0xDE, true) => "\"",
+        (0xBD, false) => "-",
+        (0xBD, true) => "_",
+        (0x31, true) => "!",
+        (0x38, true) => "*",
+        (0x39, true) => "(",
+        (0x30, true) => ")",
+        _ => return None,
+    })
+}
+
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }
@@ -149,6 +184,7 @@ impl TextService_Impl {
             return false;
         }
         digit_pick(vk).is_some()
+            || punctuation(vk).is_some()
             || matches!(
                 VIRTUAL_KEY(vk as u16),
                 VK_SPACE | VK_RETURN | VK_ESCAPE | VK_BACK | VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN
@@ -170,6 +206,9 @@ impl TextService_Impl {
                 None => Ok(()), // no such candidate: swallow the key rather than type a digit
             };
         }
+        if let Some(mark) = punctuation(vk) {
+            return self.commit_current(ctx, mark);
+        }
         match VIRTUAL_KEY(vk as u16) {
             VK_BACK => {
                 let empty = {
@@ -188,23 +227,15 @@ impl TextService_Impl {
             }
             VK_ESCAPE => self.cancel(ctx),
             VK_SPACE | VK_RETURN => {
-                // The final answer, with time to run the model: what is committed is the full
-                // ranking even when the list shown while typing was the fast one.
-                self.ask(COMMIT_DEADLINE_MS);
-                let (index, word) = {
-                    let s = self.state.borrow();
-                    let index = s.cursor.min(s.candidates.len().saturating_sub(1));
-                    let word = s.candidates.get(index).cloned().unwrap_or_else(|| s.buffer.clone());
-                    (index, word)
-                };
                 let trailing = if VIRTUAL_KEY(vk as u16) == VK_SPACE { " " } else { "" };
-                self.commit(ctx, index, word, trailing)
+                self.commit_current(ctx, trailing)
             }
             VK_RIGHT | VK_DOWN => {
                 {
                     let mut s = self.state.borrow_mut();
                     if !s.candidates.is_empty() {
                         s.cursor = (s.cursor + 1) % s.candidates.len();
+                        s.chosen = true;
                     }
                 }
                 self.update_window(ctx);
@@ -215,6 +246,7 @@ impl TextService_Impl {
                     let mut s = self.state.borrow_mut();
                     if !s.candidates.is_empty() {
                         s.cursor = (s.cursor + s.candidates.len() - 1) % s.candidates.len();
+                        s.chosen = true;
                     }
                 }
                 self.update_window(ctx);
@@ -224,26 +256,47 @@ impl TextService_Impl {
         }
     }
 
+    /// Commit whatever is highlighted, followed by `trailing`.
+    ///
+    /// Re-asks with the commit deadline only when the person has not chosen for themselves. That
+    /// second question exists so the committed word comes from the full ranking rather than the
+    /// fast path shown while typing -- but it returns a different list, and running it after an
+    /// explicit arrow selection threw that selection away and committed something else.
+    fn commit_current(&self, ctx: &ITfContext, trailing: &str) -> Result<()> {
+        if !self.state.borrow().chosen {
+            self.ask(COMMIT_DEADLINE_MS);
+        }
+        let (index, word) = {
+            let s = self.state.borrow();
+            let index = s.cursor.min(s.candidates.len().saturating_sub(1));
+            let word = s
+                .candidates
+                .get(index)
+                .cloned()
+                .unwrap_or_else(|| s.buffer.clone());
+            (index, word)
+        };
+        self.commit(ctx, index, word, trailing)
+    }
+
     /// Ask the engine for candidates for the current buffer. A dead engine leaves the list empty,
     /// and commit then falls back to the Latin as typed -- degraded, never broken.
+    ///
+    /// The highlight always returns to the first candidate. An earlier version tried to keep it on
+    /// whichever word it was on, which meant that after typing "ama" and then "r" the highlight
+    /// followed the old word to wherever it had fallen in the new ranking -- so the picker opened
+    /// pointing at the third entry for no reason the typist could see. Each new letter is a new
+    /// ranking, and the top of a new ranking is the answer.
     fn ask(&self, deadline_ms: u32) {
         let mut s = self.state.borrow_mut();
         let buffer = s.buffer.clone();
         let context = s.context.clone();
-        let previous_cursor_word = s.candidates.get(s.cursor).cloned();
         match s.engine.suggest(&buffer, &context, CANDIDATES, deadline_ms) {
-            Some(reply) => {
-                s.candidates = reply.candidates;
-                // Keep the highlight on the same word if it is still offered, else back to the top.
-                s.cursor = previous_cursor_word
-                    .and_then(|w| s.candidates.iter().position(|c| *c == w))
-                    .unwrap_or(0);
-            }
-            None => {
-                s.candidates.clear();
-                s.cursor = 0;
-            }
+            Some(reply) => s.candidates = reply.candidates,
+            None => s.candidates.clear(),
         }
+        s.cursor = 0;
+        s.chosen = false;
     }
 
     /// Start the composition if there is none, then set its text to the buffer.

@@ -28,6 +28,10 @@ pub const LANGID_BN_BD: u16 = 0x0845;
 /// and the problem cannot arise: every key arrives as the Latin character a US keyboard would give.
 pub const HKL_SUBSTITUTE_US: isize = 0x0409_0409;
 
-/// Distinct from the PIME shell's "Likhi (Bangla phonetic)" while both are installed, so a tester
-/// can tell which one they switched to. Becomes the plain name when this shell replaces PIME.
-pub const DESCRIPTION: &str = "Likhi (new shell, preview)";
+/// The name Windows shows in the keyboard picker.
+///
+/// In Bangla, because this is a Bangla keyboard and the people choosing it read Bangla; the picker
+/// puts it beside the other Bangla entries, where an English label is the odd one out. The suffix
+/// marks the preview while the PIME shell is still installed alongside, and goes when it replaces
+/// it.
+pub const DESCRIPTION: &str = "লিখি — বাংলা ফোনেটিক (প্রিভিউ)";
