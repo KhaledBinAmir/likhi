@@ -2,15 +2,27 @@
 .SYNOPSIS
   Report why the Likhi keyboard is or is not working on this machine.
 
-  Run on any machine, no admin needed, and send the output back. It reads state only and changes
-  nothing.
+  Run on any machine, no admin needed, and send back the file it writes. It reads state only and
+  changes nothing.
 
     powershell -NoProfile -ExecutionPolicy Bypass -File diagnose.ps1
+
+  Everything printed is also saved to a text file on the Desktop, because asking a tester to
+  copy-paste a console window loses half the output and all of the formatting.
 #>
 
 $clsid = '{35F67E9D-A54D-4177-9697-8B0AB71A9E04}'
 $profileGuid = '{9B4E7C21-3D5A-4F86-A2E1-6C0D8B7F5A13}'
 $tip = "0845:$clsid$profileGuid"
+
+# Desktop, then Documents, then TEMP: the first location the tester can actually find.
+$reportName = "Likhi-diagnostics-$env:COMPUTERNAME-$(Get-Date -Format yyyyMMdd-HHmmss).txt"
+$report = $null
+foreach ($dir in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('MyDocuments'), $env:TEMP)) {
+    if ($dir -and (Test-Path $dir)) { $report = Join-Path $dir $reportName; break }
+}
+$transcribing = $false
+try { Start-Transcript -Path $report -Force | Out-Null; $transcribing = $true } catch { }
 
 function Section($name) { Write-Host "`n== $name" }
 
@@ -57,8 +69,14 @@ if (Test-Path $lp) {
 } else { Write-Host "  MISSING $lp  (regsvr32 did not register any profile)" }
 
 Section "4. This user's keyboards"
-Get-WinUserLanguageList | ForEach-Object { Write-Host "  $($_.LanguageTag): $($_.InputMethodTips -join ', ')" }
-$hasTip = (Get-WinUserLanguageList | ForEach-Object { $_.InputMethodTips }) -contains $tip
+# Indexed, not piped: Get-WinUserLanguageList hands back the List as one object, so piping it
+# member-enumerates and prints every language on a single line, which is unreadable in a report.
+$langs = Get-WinUserLanguageList
+$hasTip = $false
+for ($i = 0; $i -lt $langs.Count; $i++) {
+    Write-Host "  $($langs[$i].LanguageTag): $($langs[$i].InputMethodTips -join ', ')"
+    if ($langs[$i].InputMethodTips -contains $tip) { $hasTip = $true }
+}
 Write-Host "  Likhi present for this user: $hasTip"
 try { Write-Host "  default input method: $((Get-WinDefaultInputMethodOverride).InputMethodTip)" } catch {}
 
@@ -85,4 +103,35 @@ foreach ($n in 'LikhiLauncher', 'LikhiEngine') {
     if ($v) { Write-Host "  ok      $n = $v" } else { Write-Host "  MISSING $n" }
 }
 
-Write-Host "`nSend everything above back."
+Section "8. Recent crashes involving text input"
+# A text service DLL runs inside every application that has keyboard focus, so a bad one shows up
+# as other programs dying in MSCTF.dll rather than as anything named Likhi.
+try {
+    $errs = Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='Application Error'; StartTime=(Get-Date).AddDays(-7)} -ErrorAction Stop
+    $hits = $errs | Where-Object { $_.Message -match 'MSCTF|PIMETextService|ctfmon' }
+    if ($hits) {
+        $hits | Select-Object -First 15 | ForEach-Object {
+            $lines = $_.Message -split "`r?`n"
+            $app = (($lines | Where-Object { $_ -match 'Faulting application name' }) -replace '.*name: ','' -replace ',.*','')
+            $mod = (($lines | Where-Object { $_ -match 'Faulting module name' }) -replace '.*name: ','' -replace ',.*','')
+            $code = (($lines | Where-Object { $_ -match 'Exception code' }) -replace '.*code: ','')
+            Write-Host "  $($_.TimeCreated)  $app  in $mod  $code"
+        }
+    } else { Write-Host "  none in the last 7 days" }
+} catch { Write-Host "  could not read the Application log: $($_.Exception.Message)" }
+
+Section "9. Installer logs"
+$logs = Get-ChildItem "$env:TEMP\Setup Log*.txt" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 3
+if ($logs) { $logs | ForEach-Object { Write-Host "  $($_.LastWriteTime)  $($_.FullName)" } }
+else { Write-Host "  no Inno Setup logs in $env:TEMP (they are written under the account that ran Setup)" }
+
+if ($transcribing) {
+    try { Stop-Transcript | Out-Null } catch { }
+    Write-Host ""
+    Write-Host "Saved to: $report"
+    Write-Host "Send that file back."
+    # Select it in Explorer so the tester does not have to go looking.
+    try { Start-Process explorer.exe "/select,`"$report`"" } catch { }
+} else {
+    Write-Host "`nCould not write a file; copy everything above and send it back."
+}
