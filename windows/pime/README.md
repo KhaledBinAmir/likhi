@@ -1,8 +1,7 @@
-# Likhi on Windows via PIME (smoke-test kit)
+# Likhi on Windows via PIME
 
-Status: **untested skeleton**. This is the Stage 0 feasibility check from docs/PLAN.md: prove
-that a Python-driven Text Services Framework input method works on this machine (Windows 11
-26200) before investing in the real shell.
+This is the text service itself: the files that PIME loads to turn keystrokes into Bangla. The
+installer in `installer/` ships them; the manual steps below are for development.
 
 ## What is here
 
@@ -10,7 +9,21 @@ that a Python-driven Text Services Framework input method works on this machine 
   Bengali (Bangladesh), GUID `{9B4E7C21-3D5A-4F86-A2E1-6C0D8B7F5A13}`).
 - `likhi/likhi_ime.py` — the PIME text service. Python 3.8 compatible; talks to `likhi-server`.
 - `likhi/config.json` — port, toggle key (default F12), digits and punctuation options.
-- `make_icon.py` — writes `likhi/icon.ico` (PIME wants an icon file).
+- `likhi/icon.ico` — the Likhi mark, committed. Regenerate with `make_icon.ps1`.
+- `make_icon.ps1` — draws the icon. PowerShell rather than Python because Bengali needs complex
+  script shaping and Windows' own text stack does it correctly.
+
+## PIME must be installed at `C:\Program Files (x86)\PIME`
+
+Not a preference. `PIMETextService.dll` builds that path internally and enumerates
+`<that path>\python\input_methods\*\ime.json` when `regsvr32` calls `DllRegisterServer`. It
+ignores its own location on disk and it ignores `HKLM\SOFTWARE\PIME`. Install it anywhere else
+and registration quietly succeeds while writing no language profile, so the keyboard never
+appears in the picker and nothing reports an error.
+
+This cost several days: it only showed up on machines that had never installed PIME by hand.
+A related trap in the same area — a UTF-8 BOM in `ime.json` makes PIME skip the input method
+without complaint.
 
 ## Install (needs an administrator prompt twice)
 
