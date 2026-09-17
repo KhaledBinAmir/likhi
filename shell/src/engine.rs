@@ -38,6 +38,10 @@ pub struct Suggestion {
     pub candidates: Vec<String>,
     /// True when the engine answered from its fast path because the deadline arrived first.
     pub partial: bool,
+    /// True when that fast answer is an attested spelling of exactly what was typed, seen more than
+    /// once. Asking again with the model then makes the answer worse more often than better, which
+    /// is why a strong answer is never refined and never re-asked at commit.
+    pub strong: bool,
 }
 
 /// What the engine is told when a word is committed, so it can learn and the pilot can count.
@@ -63,6 +67,8 @@ struct Reply {
     candidates: Vec<String>,
     #[serde(default)]
     partial: bool,
+    #[serde(default)]
+    strong: bool,
     #[serde(default)]
     error: Option<String>,
 }
@@ -170,6 +176,7 @@ impl Engine {
             Ok(r) if r.ok => Some(Suggestion {
                 candidates: r.candidates,
                 partial: r.partial,
+                strong: r.strong,
             }),
             Ok(r) => {
                 log!("engine error: {}", r.error.unwrap_or_default());

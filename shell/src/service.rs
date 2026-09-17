@@ -46,6 +46,9 @@ struct State {
     /// The engine answered from its fast path because the typing deadline arrived first, so this
     /// list may not be the one the full ranking would give.
     partial: bool,
+    /// That fast answer is an attested spelling of exactly what was typed, seen more than once.
+    /// Asking again would be allowed to overrule it, and measurement says that is a mistake.
+    strong: bool,
     /// Backspace was used inside this word. Reported with the commit: a word someone had to correct
     /// mid-way is a different signal from one typed straight through.
     retyped: bool,
@@ -63,6 +66,7 @@ impl State {
             cursor: 0,
             chosen: false,
             partial: false,
+            strong: false,
             retyped: false,
             context: Vec::new(),
             engine: Engine::new(port),
@@ -76,7 +80,18 @@ impl State {
         self.cursor = 0;
         self.chosen = false;
         self.partial = false;
+        self.strong = false;
         self.retyped = false;
+    }
+
+    /// Whether asking the engine again could improve this answer.
+    ///
+    /// Only a fast-path answer can be improved at all, and only one the fast path is not confident
+    /// about. Measured over Dakshina, the chat set and the feedback words: refining everything
+    /// scores 73.9 top-1, refining nothing 58.4, refining only the unconfident 75.7 -- and on chat
+    /// words alone, refining everything is a regression, 79.5 against 81.7.
+    fn worth_refining(&self) -> bool {
+        self.partial && !self.strong
     }
 
     fn remember(&mut self, word: &str) {
@@ -365,7 +380,11 @@ impl TextService_Impl {
     /// fast path shown while typing -- but it returns a different list, and running it after an
     /// explicit arrow selection threw that selection away and committed something else.
     fn commit_current(&self, ctx: &ITfContext, trailing: &str) -> Result<()> {
-        if !self.state.borrow().chosen {
+        let reask = {
+            let s = self.state.borrow();
+            !s.chosen && s.worth_refining()
+        };
+        if reask {
             self.ask(COMMIT_DEADLINE_MS);
         }
         let (index, word) = {
@@ -398,10 +417,12 @@ impl TextService_Impl {
             Some(reply) => {
                 s.candidates = reply.candidates;
                 s.partial = reply.partial;
+                s.strong = reply.strong;
             }
             None => {
                 s.candidates.clear();
                 s.partial = false;
+                s.strong = false;
             }
         }
         s.cursor = 0;
@@ -417,7 +438,7 @@ impl TextService_Impl {
     /// is on screen, and that has to be the same list. Settling costs the time of one full query,
     /// paid once, at the moment someone has stopped typing to look.
     fn settle(&self, ctx: &ITfContext) {
-        if !self.state.borrow().partial {
+        if !self.state.borrow().worth_refining() {
             return;
         }
         self.ask(COMMIT_DEADLINE_MS);
@@ -555,7 +576,7 @@ impl TextService_Impl {
             let wanted = self.config.candidates.clamp(1, 9);
             window.set_refiner(Box::new(move || {
                 let mut s = state.borrow_mut();
-                if !s.partial || s.buffer.is_empty() || s.composition.is_none() {
+                if !s.worth_refining() || s.buffer.is_empty() || s.composition.is_none() {
                     return None;
                 }
                 let buffer = s.buffer.clone();
@@ -563,6 +584,7 @@ impl TextService_Impl {
                 let reply = s.engine.suggest(&buffer, &context, wanted, COMMIT_DEADLINE_MS)?;
                 s.candidates = reply.candidates;
                 s.partial = reply.partial;
+                s.strong = reply.strong;
                 if !s.chosen {
                     s.cursor = 0;
                 }
