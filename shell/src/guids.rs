@@ -13,9 +13,13 @@ pub const CLSID_LIKHI: GUID = GUID::from_u128(0x1D24C804_FAD0_4B32_AEDD_1317F4E6
 /// The language profile: one keyboard entry under Bangla (Bangladesh) in Win+Space.
 pub const GUID_PROFILE: GUID = GUID::from_u128(0x502AB3FE_5B7C_43E9_89D1_BE885846AE0D);
 
-/// Our display attribute (the underline on text being composed), registered in M2.
-#[allow(dead_code)]
+/// Our display attribute: the underline on text being composed.
 pub const GUID_DISPLAY_ATTRIBUTE: GUID = GUID::from_u128(0x0F003D71_BA44_40A2_9A62_699FEBE259FA);
+
+/// Identifies our candidate list to a host that renders UI elements itself. A host uses it to tell
+/// one kind of element from another -- a candidate list from a reading window -- so it must be ours
+/// alone and must not change.
+pub const GUID_CANDIDATE_UI: GUID = GUID::from_u128(0x6C5CAD59_398F_494E_9C08_58644FA8EF20);
 
 /// bn-BD.
 pub const LANGID_BN_BD: u16 = 0x0845;

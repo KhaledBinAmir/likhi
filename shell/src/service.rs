@@ -26,6 +26,7 @@ use crate::edit::EditSession;
 use crate::engine::{Commit, Engine, COMMIT_DEADLINE_MS, TYPE_DEADLINE_MS};
 use crate::guids::GUID_DISPLAY_ATTRIBUTE;
 use crate::log;
+use crate::uielement::{CandidateUi, UiState};
 
 /// How many committed words are sent as context. The engine uses the last one; sending two costs
 /// nothing and leaves room for a bigram-of-bigrams later without a protocol change.
@@ -130,6 +131,14 @@ pub struct TextService {
     /// The executable this instance lives in, for per-application counters. We *are* inside the
     /// application, so this is exact -- no foreground-window guessing.
     app_name: String,
+    /// The candidate list as TSF sees it, shared with the published UI element.
+    ui: Rc<RefCell<UiState>>,
+    /// The element we published, and the id TSF gave it, while a list is on screen.
+    ui_element: RefCell<Option<ITfUIElement>>,
+    ui_element_id: Cell<u32>,
+    /// Whether the host asked us to draw the list ourselves. False in an immersive application,
+    /// which draws it from the published element instead.
+    draw_ourselves: Cell<bool>,
 }
 
 impl TextService {
@@ -151,6 +160,10 @@ impl TextService {
             bangla: Cell::new(true),
             attribute_atom: Cell::new(0),
             app_name,
+            ui: Rc::new(RefCell::new(UiState::default())),
+            ui_element: RefCell::new(None),
+            ui_element_id: Cell::new(0),
+            draw_ourselves: Cell::new(true),
         }
     }
 }
@@ -544,9 +557,61 @@ impl TextService_Impl {
     }
 
     fn hide_window(&self) {
+        self.end_ui_element();
         if let Some(w) = self.window.borrow().as_ref() {
             w.hide();
         }
+    }
+
+    fn ui_element_mgr(&self) -> Option<ITfUIElementMgr> {
+        self.thread_mgr.borrow().as_ref()?.cast().ok()
+    }
+
+    /// Publish the list, and find out who is going to draw it.
+    ///
+    /// Returns true when the host wants *us* to draw. An immersive application answers false and
+    /// renders the list itself from the published element; a host that does not support UI elements
+    /// at all leaves us drawing, which is the desktop behaviour we already had.
+    fn begin_ui_element(&self, ctx: &ITfContext) -> bool {
+        if self.ui_element.borrow().is_some() {
+            return self.draw_ourselves.get();
+        }
+        {
+            let mut ui = self.ui.borrow_mut();
+            ui.document = unsafe { ctx.GetDocumentMgr() }.ok();
+            ui.shown = true;
+        }
+        let element: ITfUIElement = CandidateUi::new(self.ui.clone()).into();
+        let Some(mgr) = self.ui_element_mgr() else {
+            self.draw_ourselves.set(true);
+            return true;
+        };
+        let mut show = BOOL(1);
+        let mut id = 0u32;
+        if unsafe { mgr.BeginUIElement(&element, &mut show, &mut id) }.is_err() {
+            self.draw_ourselves.set(true);
+            return true;
+        }
+        self.ui_element_id.set(id);
+        *self.ui_element.borrow_mut() = Some(element);
+        let ours = show.as_bool();
+        self.draw_ourselves.set(ours);
+        log!(
+            "candidate list published (id {id}); {} draws it",
+            if ours { "we" } else { "the application" }
+        );
+        ours
+    }
+
+    fn end_ui_element(&self) {
+        let element = self.ui_element.borrow_mut().take();
+        if element.is_some() {
+            if let Some(mgr) = self.ui_element_mgr() {
+                let _ = unsafe { mgr.EndUIElement(self.ui_element_id.get()) };
+            }
+        }
+        self.ui.borrow_mut().shown = false;
+        self.draw_ourselves.set(true);
     }
 
     /// Put the candidate list under the text being composed.
@@ -565,6 +630,30 @@ impl TextService_Impl {
             self.hide_window();
             return;
         }
+
+        // Publish first, then draw only if the host wants us to. The shared state is updated before
+        // BeginUIElement so a host that reads the element during that call already sees the list.
+        {
+            let mut ui = self.ui.borrow_mut();
+            ui.candidates = candidates.clone();
+            ui.cursor = cursor;
+        }
+        let new_element = self.ui_element.borrow().is_none();
+        let ours = self.begin_ui_element(ctx);
+        if !new_element {
+            if let Some(mgr) = self.ui_element_mgr() {
+                let _ = unsafe { mgr.UpdateUIElement(self.ui_element_id.get()) };
+            }
+        }
+        if !ours || !self.ui.borrow().shown {
+            // The application is drawing the list, or TSF has asked for it to be hidden. Either
+            // way our own window must not be on screen alongside it.
+            if let Some(w) = self.window.borrow().as_ref() {
+                w.hide();
+            }
+            return;
+        }
+
         if self.window.borrow().is_none() {
             let Some(window) = CandidateWindow::new() else {
                 log!("candidate window could not be created");

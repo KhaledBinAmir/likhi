@@ -8,6 +8,17 @@
 ; rights once and leaves the user with a working Bangla keyboard and nothing to configure.
 
 #define AppName "Likhi"
+; 0.2.4: a full stop after a space typed a period rather than the dari -- punctuation was handled
+;        only inside a composition, and after Space there is none. The suggestion list often failed
+;        to appear for the first letter of a word, because GetTextExt on a composition created a
+;        moment earlier reports it as not laid out; it falls back to the caret now. The shell
+;        under-reported to telemetry: the engine's learn call is also the pilot's counting path, and
+;        it was sent only when the committed word differed from the Latin, without the candidate
+;        position -- so "first suggestion taken" counted nothing for the first suggestion. Every
+;        commit is reported now, with position, whether the word was retyped, and the application.
+;        The list refines itself when you pause, but only when the fast answer is not already
+;        attested: refining everything measured 73.9 top-1 against 75.7 gated, and on chat words it
+;        was a regression. A dead engine no longer costs every keystroke a connection attempt.
 ; 0.2.3: the setting that pointed Bangla at a chosen font across the whole machine is removed,
 ;        because it did not work. Windows has no Bangla font to change: an application asks for
 ;        Segoe UI, which has no Bengali glyphs, and something else supplies them. Choosing that
@@ -109,7 +120,7 @@
 ;        running engine with PowerShell rather than WMIC, which Windows 11 no longer ships.
 ; 0.1.1: the engine did not look for the shell's config.json in the installed layout, so a fresh
 ;        install never reported telemetry.
-#define AppVersion "0.2.3"
+#define AppVersion "0.2.4"
 #define AppPublisher "Khaled Bin Amir"
 #define AppURL "https://github.com/KhaledBinAmir/likhi"
 #define PimeSource "C:\Program Files (x86)\PIME"
