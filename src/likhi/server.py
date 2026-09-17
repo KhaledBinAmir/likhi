@@ -13,7 +13,10 @@ ranking). Typing therefore never waits on the model.
 
 Protocol: JSON lines over 127.0.0.1:<port> (default 47123), one request per line:
     {"op": "suggest", "roman": "amr", "context": ["আমি"], "k": 5, "deadline_ms": 12}
-    -> {"ok": true, "candidates": ["আমার", ...], "partial": false, "ms": 3.1}
+    -> {"ok": true, "candidates": [...], "partial": false, "strong": false, "ms": 3.1}
+       ``partial``: answered from the fast path because the deadline arrived first.
+       ``strong``: that fast answer is an attested spelling of exactly this input, seen more than
+       once -- evidence the full ranking should not be allowed to overrule.
     {"op": "ping"} -> {"ok": true, "version": "0.0.1"}
     {"op": "learn", "roman": "amr", "chosen": "আমার", "context": [...]} -> {"ok": true}
 
@@ -83,13 +86,21 @@ class SuggestService:
 
     def suggest(
         self, roman: str, context: tuple[str, ...], k: int, deadline_ms: float
-    ) -> tuple[list[str], bool]:
+    ) -> tuple[list[str], bool, bool]:
+        """Candidates, whether this came from the fast path, and whether the fast path is confident.
+
+        The third value is what lets a caller decide not to ask again. The fast path is *strong*
+        when some candidate is an attested spelling of exactly what was typed, seen more than once,
+        and measured over Dakshina, the chat set and the feedback words that beats the full ranking
+        on those words: 90.2 against 85.7 top-1 on chat. Replacing a strong fast answer with the
+        model's is how "rapid" showed র‍্যাপিড and then changed its mind to রাপিড.
+        """
         key = self._key(roman, context, k)
         self.latest_key = key
         cached = self.full_cache.get(key)
         if cached is not None:
             self.full_cache.move_to_end(key)
-            return cached, False
+            return cached, False, False
         fut = self.pending.get(key)
         if fut is None:
             # Earlier prefixes of the word being typed are stale: drop the ones not started yet so
@@ -103,7 +114,7 @@ class SuggestService:
         self.waiting.add(key)
         try:
             try:
-                return fut.result(timeout=max(0.0, deadline_ms) / 1000.0), False
+                return fut.result(timeout=max(0.0, deadline_ms) / 1000.0), False, False
             except Exception:
                 pass  # timeout (or a model error / abort): fall back to the fast path
             fast, strong = self.engine.fast_suggest(roman, context, k)
@@ -111,12 +122,12 @@ class SuggestService:
                 # The trie channels have nothing convincing (typically an English loanword or a
                 # name): a wrong-looking flash is worse than a slightly later answer, so wait.
                 try:
-                    return fut.result(timeout=WEAK_MATCH_DEADLINE_MS / 1000.0), False
+                    return fut.result(timeout=WEAK_MATCH_DEADLINE_MS / 1000.0), False, False
                 except Exception:
                     pass
         finally:
             self.waiting.discard(key)
-        return fast, True
+        return fast, True, strong
 
     def _done(self, key: tuple, fut: Future) -> None:
         self.pending.pop(key, None)
@@ -147,7 +158,7 @@ class _Handler(socketserver.StreamRequestHandler):
                     resp = {"ok": True, "version": __version__}
                 elif op == "suggest":
                     t = time.perf_counter()
-                    cands, partial = svc.suggest(
+                    cands, partial, strong = svc.suggest(
                         req.get("roman", ""),
                         tuple(req.get("context", ())),
                         int(req.get("k", 5)),
@@ -157,6 +168,7 @@ class _Handler(socketserver.StreamRequestHandler):
                         "ok": True,
                         "candidates": cands,
                         "partial": partial,
+                        "strong": strong,
                         "ms": round((time.perf_counter() - t) * 1000, 2),
                     }
                 elif op == "learn":
