@@ -383,7 +383,9 @@ namespace Likhi
             // had chosen into the settings file before the window was even on screen.
             loading = true;
             Text = "Likhi";
-            ClientSize = new Size(520, 600);
+            // 628 rather than 600: the extra 28 is the credit line under the buttons. The layout
+            // below is a hand-laid grid with no auto-sizing, so height is changed here or nowhere.
+            ClientSize = new Size(520, 628);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
@@ -454,6 +456,12 @@ namespace Likhi
             restart.Click += delegate { Env.RestartEngine(); System.Threading.Thread.Sleep(1500); Refresh2(); };
             Button site = Btn("Project page", 332, y, 170);
             site.Click += delegate { Open("https://github.com/KhaledBinAmir/likhi"); };
+            y += 40;
+
+            // Nirmala UI for this one line: it carries Bangla, and Segoe UI does not, so the
+            // লিখি would come out as boxes on a machine without font linking.
+            Body("লিখি  ·  made by Khaled Bin Amir  ·  free and open source, MIT",
+                18, y, Dim, "Nirmala UI", 20);
 
             autostart.CheckedChanged += delegate
             {
