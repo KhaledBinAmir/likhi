@@ -1,12 +1,10 @@
 //! The text service: what TSF instantiates inside each application that switches to Likhi.
 //!
-//! Milestone 2a. The typed Latin is shown as a composition; every keystroke asks the engine for
-//! candidates within the typing deadline; Space or Enter asks once more with the commit deadline
-//! and commits the highlighted candidate, digits 1-5 pick one directly, arrows move the highlight,
-//! Escape cancels. What the engine was told is reported back with `learn` so it improves.
-//!
-//! Not yet: the candidate window (2b) and the underline on the composition (2c). Until 2b the
-//! highlight is invisible but the keys already behave as they will.
+//! Typed Latin is shown as a composition, underlined; every keystroke asks the engine for
+//! candidates within the typing deadline and shows them in our own window; Space or Enter commits
+//! the highlighted candidate, digits pick one, arrows move the highlight, punctuation ends the word
+//! and follows it, Escape cancels. The toggle key switches to plain English and back. Every commit
+//! is reported to the engine so it learns and the pilot can count.
 
 use std::cell::{Cell, RefCell};
 use std::mem::ManuallyDrop;
@@ -18,17 +16,23 @@ use windows::Win32::System::Com::*;
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::TextServices::*;
+use windows::Win32::UI::WindowsAndMessaging::{GetGUIThreadInfo, GUITHREADINFO};
+use windows::Win32::Graphics::Gdi::ClientToScreen;
 
 use crate::candidates::CandidateWindow;
 use crate::config::{Config, BANGLA_DIGITS};
 use crate::display::{DisplayAttributeInfo, EnumDisplayAttributeInfo};
 use crate::edit::EditSession;
-use crate::engine::{Engine, COMMIT_DEADLINE_MS, TYPE_DEADLINE_MS};
+use crate::engine::{Commit, Engine, COMMIT_DEADLINE_MS, TYPE_DEADLINE_MS};
 use crate::guids::GUID_DISPLAY_ATTRIBUTE;
 use crate::log;
+
 /// How many committed words are sent as context. The engine uses the last one; sending two costs
 /// nothing and leaves room for a bigram-of-bigrams later without a protocol change.
 const CONTEXT_WORDS: usize = 2;
+
+const VK_OEM_PERIOD_CODE: u32 = 0xBE;
+const DARI: &str = "\u{0964}";
 
 /// Everything that changes while typing, behind one `Rc` so edit-session closures can share it.
 struct State {
@@ -42,6 +46,9 @@ struct State {
     /// The engine answered from its fast path because the typing deadline arrived first, so this
     /// list may not be the one the full ranking would give.
     partial: bool,
+    /// Backspace was used inside this word. Reported with the commit: a word someone had to correct
+    /// mid-way is a different signal from one typed straight through.
+    retyped: bool,
     /// Recently committed words, oldest first.
     context: Vec<String>,
     engine: Engine,
@@ -56,6 +63,7 @@ impl State {
             cursor: 0,
             chosen: false,
             partial: false,
+            retyped: false,
             context: Vec::new(),
             engine: Engine::new(port),
         }
@@ -68,6 +76,7 @@ impl State {
         self.cursor = 0;
         self.chosen = false;
         self.partial = false;
+        self.retyped = false;
     }
 
     fn remember(&mut self, word: &str) {
@@ -96,25 +105,37 @@ pub struct TextService {
     /// Created on first use, on the application's UI thread, and kept for the life of the service.
     window: RefCell<Option<CandidateWindow>>,
     config: Config,
+    /// The toggle key's virtual key code, resolved once. It is consulted on every keystroke, and
+    /// parsing "F12" out of a string each time is work the typing path does not need.
+    toggle_vk: Option<u32>,
     /// False after the toggle key: letters go through as plain English without leaving the keyboard.
     bangla: Cell<bool>,
     /// The atom TSF uses to name our display attribute on a range. Resolved once at activation.
     attribute_atom: Cell<u32>,
+    /// The executable this instance lives in, for per-application counters. We *are* inside the
+    /// application, so this is exact -- no foreground-window guessing.
+    app_name: String,
 }
 
 impl TextService {
     pub fn new() -> Self {
         let config = Config::load();
         let state = Rc::new(RefCell::new(State::new(config.server_port)));
+        let app_name = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_name().map(|f| f.to_string_lossy().into_owned()))
+            .unwrap_or_default();
         TextService {
             thread_mgr: RefCell::new(None),
             client_id: Cell::new(0),
             thread_mgr_cookie: Cell::new(TF_INVALID_COOKIE),
             state,
             window: RefCell::new(None),
+            toggle_vk: config.toggle_vk(),
             config,
             bangla: Cell::new(true),
             attribute_atom: Cell::new(0),
+            app_name,
         }
     }
 }
@@ -142,10 +163,10 @@ fn letter(vk: u32) -> Option<char> {
     Some(if upper { c } else { c.to_ascii_lowercase() })
 }
 
-/// 1..5 on the main row picks a candidate while composing. Shift+digit is punctuation, not a pick.
-fn digit_pick(vk: u32) -> Option<usize> {
-    if (0x31..=0x35).contains(&vk) && !key_down(VK_SHIFT) {
-        Some((vk - 0x31) as usize)
+/// An unshifted digit on the main row, as a value 0..9. Shift+digit is punctuation, not a digit.
+fn digit(vk: u32) -> Option<usize> {
+    if (0x30..=0x39).contains(&vk) && !key_down(VK_SHIFT) {
+        Some((vk - 0x30) as usize)
     } else {
         None
     }
@@ -163,8 +184,8 @@ fn punctuation(vk: u32) -> Option<&'static str> {
     Some(match (vk, shift) {
         (0xBC, false) => ",",
         (0xBC, true) => "<",
-        (0xBE, false) => "\u{0964}", // ।
-        (0xBE, true) => ">",
+        (VK_OEM_PERIOD_CODE, false) => DARI,
+        (VK_OEM_PERIOD_CODE, true) => ">",
         (0xBA, false) => ";",
         (0xBA, true) => ":",
         (0xBF, false) => "/",
@@ -173,7 +194,23 @@ fn punctuation(vk: u32) -> Option<&'static str> {
         (0xDE, true) => "\"",
         (0xBD, false) => "-",
         (0xBD, true) => "_",
+        (0xBB, false) => "=",
+        (0xBB, true) => "+",
+        (0xDB, false) => "[",
+        (0xDB, true) => "{",
+        (0xDD, false) => "]",
+        (0xDD, true) => "}",
+        (0xDC, false) => "\\",
+        (0xDC, true) => "|",
+        (0xC0, false) => "`",
+        (0xC0, true) => "~",
         (0x31, true) => "!",
+        (0x32, true) => "@",
+        (0x33, true) => "#",
+        (0x34, true) => "$",
+        (0x35, true) => "%",
+        (0x36, true) => "^",
+        (0x37, true) => "&",
         (0x38, true) => "*",
         (0x39, true) => "(",
         (0x30, true) => ")",
@@ -190,6 +227,23 @@ impl TextService_Impl {
         self.state.borrow().composition.is_some()
     }
 
+    /// The full stop alone, typed with no word open. The daṛi is the Bangla sentence end whether or
+    /// not a word was being composed at the time, and after a Space it never is.
+    fn lone_period(&self, vk: u32) -> bool {
+        self.config.danda_for_period
+            && !self.composing()
+            && vk == VK_OEM_PERIOD_CODE
+            && !key_down(VK_SHIFT)
+    }
+
+    fn lone_digit(&self, vk: u32) -> Option<usize> {
+        if self.config.bangla_digits && !self.composing() {
+            digit(vk)
+        } else {
+            None
+        }
+    }
+
     /// Whether this key is ours. Asked twice per key (OnTestKeyDown, then OnKeyDown) and the answer
     /// must be the same both times, so it depends on nothing that the first call changes.
     fn wants(&self, vk: u32) -> bool {
@@ -197,25 +251,21 @@ impl TextService_Impl {
             return false;
         }
         // The toggle is ours in both modes: it is how you get back.
-        if self.config.toggle_vk() == Some(vk) {
+        if self.toggle_vk == Some(vk) {
             return true;
         }
         if !self.bangla.get() {
             return false;
         }
-        if letter(vk).is_some() {
-            return true;
-        }
-        // A digit with nothing being composed types a Bengali digit rather than picking a candidate.
-        if self.config.bangla_digits && !self.composing() && (0x30..=0x39).contains(&vk)
-            && !key_down(VK_SHIFT)
-        {
+        if letter(vk).is_some() || self.lone_digit(vk).is_some() || self.lone_period(vk) {
             return true;
         }
         if !self.composing() {
             return false;
         }
-        digit_pick(vk).is_some()
+        // While a word is open every digit is ours -- a pick if there is such a candidate, swallowed
+        // if not -- so an application never receives a stray "7" in the middle of a composition.
+        digit(vk).is_some()
             || punctuation(vk).is_some()
             || matches!(
                 VIRTUAL_KEY(vk as u16),
@@ -224,7 +274,7 @@ impl TextService_Impl {
     }
 
     fn handle(&self, ctx: &ITfContext, vk: u32) -> Result<()> {
-        if self.config.toggle_vk() == Some(vk) {
+        if self.toggle_vk == Some(vk) {
             // Finish whatever is open before switching, so the mode change never eats a word.
             if self.composing() {
                 self.commit_current(ctx, "")?;
@@ -237,14 +287,11 @@ impl TextService_Impl {
         if !self.bangla.get() {
             return Ok(());
         }
-        // A digit with no composition open: type the Bengali digit directly.
-        if self.config.bangla_digits
-            && !self.composing()
-            && (0x30..=0x39).contains(&vk)
-            && !key_down(VK_SHIFT)
-        {
-            let d = BANGLA_DIGITS[(vk - 0x30) as usize];
-            return self.insert(ctx, d);
+        if let Some(d) = self.lone_digit(vk) {
+            return self.insert(ctx, BANGLA_DIGITS[d]);
+        }
+        if self.lone_period(vk) {
+            return self.insert(ctx, DARI);
         }
         if let Some(ch) = letter(vk) {
             self.state.borrow_mut().buffer.push(ch);
@@ -253,20 +300,20 @@ impl TextService_Impl {
             self.update_window(ctx);
             return Ok(());
         }
-        if let Some(index) = digit_pick(vk) {
+        if let Some(d) = digit(vk) {
+            // 1..9 picks; 0 and out-of-range digits are swallowed rather than typed into the word.
+            if d == 0 {
+                return Ok(());
+            }
             self.settle(ctx);
-            let picked = self.state.borrow().candidates.get(index).cloned();
+            let picked = self.state.borrow().candidates.get(d - 1).cloned();
             return match picked {
-                Some(word) => self.commit(ctx, index, word, ""),
-                None => Ok(()), // no such candidate: swallow the key rather than type a digit
+                Some(word) => self.commit(ctx, d - 1, word, ""),
+                None => Ok(()),
             };
         }
         if let Some(mark) = punctuation(vk) {
-            let mark = if mark == "\u{0964}" && !self.config.danda_for_period {
-                "."
-            } else {
-                mark
-            };
+            let mark = if mark == DARI && !self.config.danda_for_period { "." } else { mark };
             return self.commit_current(ctx, mark);
         }
         match VIRTUAL_KEY(vk as u16) {
@@ -274,6 +321,7 @@ impl TextService_Impl {
                 let empty = {
                     let mut s = self.state.borrow_mut();
                     s.buffer.pop();
+                    s.retyped = true;
                     s.buffer.is_empty()
                 };
                 if empty {
@@ -290,32 +338,24 @@ impl TextService_Impl {
                 let trailing = if VIRTUAL_KEY(vk as u16) == VK_SPACE { " " } else { "" };
                 self.commit_current(ctx, trailing)
             }
-            VK_RIGHT | VK_DOWN => {
-                self.settle(ctx);
-                {
-                    let mut s = self.state.borrow_mut();
-                    if !s.candidates.is_empty() {
-                        s.cursor = (s.cursor + 1) % s.candidates.len();
-                        s.chosen = true;
-                    }
-                }
-                self.update_window(ctx);
-                Ok(())
-            }
-            VK_LEFT | VK_UP => {
-                self.settle(ctx);
-                {
-                    let mut s = self.state.borrow_mut();
-                    if !s.candidates.is_empty() {
-                        s.cursor = (s.cursor + s.candidates.len() - 1) % s.candidates.len();
-                        s.chosen = true;
-                    }
-                }
-                self.update_window(ctx);
-                Ok(())
-            }
+            VK_RIGHT | VK_DOWN => self.move_highlight(ctx, 1),
+            VK_LEFT | VK_UP => self.move_highlight(ctx, -1),
             _ => Ok(()),
         }
+    }
+
+    fn move_highlight(&self, ctx: &ITfContext, by: isize) -> Result<()> {
+        self.settle(ctx);
+        {
+            let mut s = self.state.borrow_mut();
+            let n = s.candidates.len();
+            if n > 0 {
+                s.cursor = (s.cursor as isize + by).rem_euclid(n as isize) as usize;
+                s.chosen = true;
+            }
+        }
+        self.update_window(ctx);
+        Ok(())
     }
 
     /// Commit whatever is highlighted, followed by `trailing`.
@@ -413,7 +453,8 @@ impl TextService_Impl {
         })
     }
 
-    /// Type text straight into the document, with no composition. Used for Bengali digits.
+    /// Type text straight into the document, with no composition. Used for Bengali digits and the
+    /// lone daṛi.
     fn insert(&self, ctx: &ITfContext, text: &str) -> Result<()> {
         let text = wide(text);
         let ctx2 = ctx.clone();
@@ -425,17 +466,30 @@ impl TextService_Impl {
         })
     }
 
-    /// Commit `word` (plus `trailing`) in place of the composition, report the choice, remember it.
+    /// Commit `word` (plus `trailing`) in place of the composition, report it, remember it.
+    ///
+    /// Reported on every commit, not only when the word differs from the Latin typed. The engine's
+    /// learn call is also the pilot's only counting path: `index` is how "first suggestion taken"
+    /// is measured, and an earlier version sent nothing for index 0, which made that number
+    /// meaningless.
     fn commit(&self, ctx: &ITfContext, index: usize, word: String, trailing: &str) -> Result<()> {
         {
             let mut s = self.state.borrow_mut();
             let buffer = s.buffer.clone();
             let context = s.context.clone();
             let top1 = s.candidates.first().cloned().unwrap_or_default();
-            if !buffer.is_empty() && word != buffer {
-                s.engine.learn(&buffer, &word, &context, &top1);
+            let retyped = s.retyped;
+            if !buffer.is_empty() {
+                s.engine.learn(&Commit {
+                    roman: &buffer,
+                    chosen: &word,
+                    top1: &top1,
+                    index,
+                    retyped,
+                    app: &self.app_name,
+                    context: &context,
+                });
             }
-            let _ = index;
             s.remember(&word);
         }
         self.finish(ctx, format!("{word}{trailing}"))
@@ -478,8 +532,9 @@ impl TextService_Impl {
     ///
     /// The anchor comes from the context view, which is the only thing that knows where the
     /// composition ended up on screen -- an application may have scrolled, wrapped or transformed
-    /// it. When it cannot say (`GetTextExt` reports the text is clipped, or there is no view), the
-    /// window is hidden rather than drawn somewhere wrong.
+    /// it. When it cannot say yet -- and for the very first letter of a word it often cannot, the
+    /// composition having been created a moment ago and not laid out -- the caret is used instead.
+    /// The list is hidden only when neither is known.
     fn update_window(&self, ctx: &ITfContext) {
         let (candidates, cursor) = {
             let s = self.state.borrow();
@@ -490,13 +545,35 @@ impl TextService_Impl {
             return;
         }
         if self.window.borrow().is_none() {
-            *self.window.borrow_mut() = CandidateWindow::new();
-            if self.window.borrow().is_none() {
+            let Some(window) = CandidateWindow::new() else {
                 log!("candidate window could not be created");
                 return;
-            }
+            };
+            // What the pause timer runs: the full ranking for whatever is being composed. Only when
+            // the visible list came from the fast path, and never over an explicit choice.
+            let state = self.state.clone();
+            let wanted = self.config.candidates.clamp(1, 9);
+            window.set_refiner(Box::new(move || {
+                let mut s = state.borrow_mut();
+                if !s.partial || s.buffer.is_empty() || s.composition.is_none() {
+                    return None;
+                }
+                let buffer = s.buffer.clone();
+                let context = s.context.clone();
+                let reply = s.engine.suggest(&buffer, &context, wanted, COMMIT_DEADLINE_MS)?;
+                s.candidates = reply.candidates;
+                s.partial = reply.partial;
+                if !s.chosen {
+                    s.cursor = 0;
+                }
+                Some(crate::candidates::Content {
+                    candidates: s.candidates.clone(),
+                    cursor: s.cursor,
+                })
+            }));
+            *self.window.borrow_mut() = Some(window);
         }
-        let anchor = match self.composition_rect(ctx) {
+        let anchor = match self.composition_rect(ctx).or_else(caret_rect) {
             Some(r) => r,
             None => {
                 self.hide_window();
@@ -520,7 +597,8 @@ impl TextService_Impl {
             let mut rect = RECT::default();
             let mut clipped = BOOL(0);
             unsafe { view.GetTextExt(ec, &range, &mut rect, &mut clipped) }?;
-            if !clipped.as_bool() {
+            // A zero-area rectangle is "not laid out yet", whatever the clipped flag says.
+            if !clipped.as_bool() && rect.right > rect.left && rect.bottom > rect.top {
                 out.set(Some(rect));
             }
             Ok(())
@@ -529,6 +607,38 @@ impl TextService_Impl {
             return None;
         }
         result.get()
+    }
+}
+
+/// The caret of the focused window, in screen coordinates. The fallback anchor for the candidate
+/// list when TSF cannot yet say where the composition is.
+fn caret_rect() -> Option<RECT> {
+    unsafe {
+        let mut info = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        // Thread 0: the foreground thread, which is the one typing.
+        GetGUIThreadInfo(0, &mut info).ok()?;
+        if info.hwndCaret.is_invalid() {
+            return None;
+        }
+        let mut top_left = POINT { x: info.rcCaret.left, y: info.rcCaret.top };
+        let mut bottom_right = POINT { x: info.rcCaret.right, y: info.rcCaret.bottom };
+        if !ClientToScreen(info.hwndCaret, &mut top_left).as_bool()
+            || !ClientToScreen(info.hwndCaret, &mut bottom_right).as_bool()
+        {
+            return None;
+        }
+        if bottom_right.y <= top_left.y {
+            return None;
+        }
+        Some(RECT {
+            left: top_left.x,
+            top: top_left.y,
+            right: bottom_right.x.max(top_left.x + 1),
+            bottom: bottom_right.y,
+        })
     }
 }
 
@@ -550,6 +660,8 @@ fn mark_composing(ctx: &ITfContext, ec: u32, range: &ITfRange, atom: u32) {
 fn place_caret_after(ctx: &ITfContext, ec: u32, range: &ITfRange) -> Result<()> {
     unsafe {
         range.Collapse(ec, TF_ANCHOR_END)?;
+        // TF_SELECTION holds its range as ManuallyDrop: COM will not release it for us, so the
+        // reference the clone took is released by hand once the call is over.
         let mut selection = TF_SELECTION {
             range: ManuallyDrop::new(Some(range.clone())),
             style: TF_SELECTIONSTYLE {
@@ -557,8 +669,7 @@ fn place_caret_after(ctx: &ITfContext, ec: u32, range: &ITfRange) -> Result<()> 
                 fInterimChar: BOOL(0),
             },
         };
-        let result = ctx.SetSelection(ec, &[selection.clone()]);
-        // The clone inside ManuallyDrop holds a reference COM will never release for us.
+        let result = ctx.SetSelection(ec, std::slice::from_ref(&selection));
         ManuallyDrop::drop(&mut selection.range);
         result
     }
@@ -596,7 +707,7 @@ impl ITfTextInputProcessorEx_Impl for TextService_Impl {
     fn ActivateEx(&self, ptim: Ref<ITfThreadMgr>, tid: u32, flags: u32) -> Result<()> {
         let tim = ptim.ok()?.clone();
         self.client_id.set(tid);
-        log!("activate client={tid} flags={flags:#x}");
+        log!("activate in {} client={tid} flags={flags:#x}", self.app_name);
         unsafe {
             let source: ITfSource = tim.cast()?;
             let sink: ITfThreadMgrEventSink = self.to_interface();
@@ -666,7 +777,12 @@ impl ITfThreadMgrEventSink_Impl for TextService_Impl {
 // ------------------------------------------------------------------ keys
 
 impl ITfKeyEventSink_Impl for TextService_Impl {
-    fn OnSetFocus(&self, _foreground: BOOL) -> Result<()> {
+    fn OnSetFocus(&self, foreground: BOOL) -> Result<()> {
+        // The application lost the keyboard. A list left floating over whatever came to the front
+        // is the one thing about a candidate window people remember.
+        if !foreground.as_bool() {
+            self.hide_window();
+        }
         Ok(())
     }
 

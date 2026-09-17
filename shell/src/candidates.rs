@@ -7,6 +7,11 @@
 //!
 //! One window per text service instance, created lazily on the application's UI thread (which is
 //! where TSF calls us), never activated, always on top, hidden when nothing is being composed.
+//!
+//! It also refines itself. The list shown on a keystroke is whatever the engine had within the
+//! typing deadline; when the typist pauses, a timer asks once more with time for the model and
+//! redraws. Pilot users typing "myam" saw a list without ম্যাম and reasonably concluded the word
+//! was not there -- it was, one full ranking away.
 
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -16,9 +21,9 @@ use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectWrite::*;
+use windows::Win32::Graphics::Dwm::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Gdi::*;
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Registry::*;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -54,9 +59,16 @@ const GAP: f32 = 18.0;
 /// Between a candidate's number and its word. Without it the digit crowds the Bangla and the pair
 /// reads as one token: "1আমার" rather than "1  আমার".
 const NUMBER_GAP: f32 = 5.0;
+/// Highlight pill overhang around the selected candidate.
+const PILL_X: f32 = 6.0;
+const PILL_Y: f32 = 3.0;
 const RADIUS: f32 = 6.0;
 /// Space between the composition's bottom edge and the window.
 const OFFSET_Y: i32 = 4;
+
+/// How long after the last keystroke before the list is refined with the full ranking.
+const REFINE_TIMER_ID: usize = 1;
+const REFINE_AFTER_MS: u32 = 150;
 
 struct Theme {
     background: D2D1_COLOR_F,
@@ -124,10 +136,28 @@ fn theme() -> Theme {
 /// What the window draws. Kept apart from the Direct2D objects so a change of content never has
 /// to touch device resources.
 #[derive(Default, Clone)]
-struct Content {
-    candidates: Vec<String>,
-    cursor: usize,
+pub struct Content {
+    pub candidates: Vec<String>,
+    pub cursor: usize,
 }
+
+/// One candidate's measurements, in DIPs. The number and the word are measured separately because
+/// they are drawn separately, in different colours; measuring the pair as one string gave a width
+/// that did not match what was drawn, and the highlight pill missed its text.
+struct CellMetrics {
+    number_width: f32,
+    word_width: f32,
+    height: f32,
+}
+
+impl CellMetrics {
+    fn width(&self) -> f32 {
+        self.number_width + NUMBER_GAP + self.word_width
+    }
+}
+
+/// Asked when the typist pauses: the fresh full ranking, or None if there is nothing to refine.
+pub type Refiner = Box<dyn Fn() -> Option<Content>>;
 
 struct Inner {
     hwnd: HWND,
@@ -138,8 +168,9 @@ struct Inner {
     target: Option<ID2D1HwndRenderTarget>,
     /// Config stamp the current text format was built from, so a font chosen in the Likhi window
     /// takes effect while typing rather than at the next sign-in.
-    config_stamp: u64,
+    config_stamp: u128,
     last_checked: Option<std::time::Instant>,
+    refiner: Option<Refiner>,
 }
 
 pub struct CandidateWindow {
@@ -148,12 +179,16 @@ pub struct CandidateWindow {
 
 impl CandidateWindow {
     pub fn new() -> Option<Self> {
-        let hinstance = unsafe { GetModuleHandleW(None) }.ok()?;
+        // Our own module, not the host's: a window class registered from a DLL must name the DLL,
+        // or the class outlives the code its window procedure points into.
+        let hinstance: HINSTANCE = crate::module_handle().into();
         let class = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-            style: CS_HREDRAW | CS_VREDRAW,
+            // CS_DROPSHADOW: the shadow Windows gives menus and tooltips, free, and the single
+            // cheapest thing that makes a floating panel look like it belongs to the desktop.
+            style: CS_HREDRAW | CS_VREDRAW | CS_DROPSHADOW,
             lpfnWndProc: Some(wndproc),
-            hInstance: hinstance.into(),
+            hInstance: hinstance,
             hCursor: unsafe { LoadCursorW(None, IDC_ARROW) }.unwrap_or_default(),
             lpszClassName: CLASS_NAME,
             ..Default::default()
@@ -170,6 +205,7 @@ impl CandidateWindow {
             target: None,
             config_stamp: 0,
             last_checked: None,
+            refiner: None,
         }));
         let hwnd = unsafe {
             CreateWindowExW(
@@ -183,63 +219,64 @@ impl CandidateWindow {
                 10,
                 None,
                 None,
-                Some(hinstance.into()),
+                Some(hinstance),
                 Some(&*inner as *const RefCell<Inner> as *const c_void),
             )
         }
         .ok()?;
         inner.borrow_mut().hwnd = hwnd;
+
+        // Real rounded corners from the window manager on Windows 11. Before this the corners were
+        // painted in the background colour inside a square window, which showed against anything
+        // that was not that colour. Older Windows ignores the attribute and keeps the square.
+        unsafe {
+            let preference = DWMWCP_ROUND;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                &preference as *const _ as *const c_void,
+                std::mem::size_of_val(&preference) as u32,
+            );
+        }
         Some(CandidateWindow { inner })
     }
 
+    /// Install the function the pause timer calls to fetch the full ranking.
+    pub fn set_refiner(&self, refiner: Refiner) {
+        self.inner.borrow_mut().refiner = Some(refiner);
+    }
+
     /// Replace the list and highlight, re-measure, and show the window just below `anchor`
-    /// (the composition's rectangle in screen coordinates).
+    /// (the composition's rectangle in screen coordinates). Arms the refine timer.
     pub fn show(&self, candidates: &[String], cursor: usize, anchor: &RECT) {
-        let hwnd = self.inner.borrow().hwnd;
         if candidates.is_empty() {
             self.hide();
             return;
         }
-        {
+        let hwnd = self.inner.borrow().hwnd;
+        let size = {
             let mut inner = self.inner.borrow_mut();
             inner.content = Content {
                 candidates: candidates.to_vec(),
                 cursor,
             };
-        }
-        let (w, h) = match self.measure() {
-            Some(size) => size,
-            None => return,
+            inner.measure()
         };
-        let (x, y) = clamp_to_monitor(hwnd, anchor.left, anchor.bottom + OFFSET_Y, w, h);
+        let Some((w, h)) = size else { return };
+        let (x, y) = place(anchor, w, h);
         unsafe {
             let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
             let _ = InvalidateRect(Some(hwnd), None, false);
+            SetTimer(Some(hwnd), REFINE_TIMER_ID, REFINE_AFTER_MS, None);
         }
     }
 
     pub fn hide(&self) {
         let hwnd = self.inner.borrow().hwnd;
         unsafe {
+            let _ = KillTimer(Some(hwnd), REFINE_TIMER_ID);
             let _ = ShowWindow(hwnd, SW_HIDE);
         }
-    }
-
-    fn measure(&self) -> Option<(i32, i32)> {
-        let mut inner = self.inner.borrow_mut();
-        inner.ensure_dwrite()?;
-        let scale = inner.scale();
-        let format = inner.format.clone()?;
-        let dwrite = inner.dwrite.clone()?;
-        let mut width = PAD_X * 2.0;
-        let mut height: f32 = 0.0;
-        for (i, c) in inner.content.candidates.iter().enumerate() {
-            let m = text_metrics(&dwrite, &format, &label(i, c))?;
-            width += m.width + if i + 1 < inner.content.candidates.len() { GAP } else { 0.0 };
-            height = height.max(m.height);
-        }
-        height += PAD_Y * 2.0;
-        Some(((width * scale).ceil() as i32, (height * scale).ceil() as i32))
     }
 }
 
@@ -248,17 +285,13 @@ impl Drop for CandidateWindow {
         let hwnd = self.inner.borrow().hwnd;
         if !hwnd.is_invalid() {
             unsafe {
+                let _ = KillTimer(Some(hwnd), REFINE_TIMER_ID);
                 // Detach first so a late message cannot reach freed memory.
                 set_user_data(hwnd, 0);
                 let _ = DestroyWindow(hwnd);
             }
         }
     }
-}
-
-/// Measured as one string so the number and the word are spaced by the same metrics that draw them.
-fn label(index: usize, candidate: &str) -> String {
-    format!("{}  {}", index + 1, candidate)
 }
 
 fn number_label(index: usize) -> String {
@@ -294,10 +327,9 @@ unsafe fn get_user_data(hwnd: HWND) -> isize {
 fn family_available(dwrite: &IDWriteFactory, family: PCWSTR) -> bool {
     unsafe {
         let mut collection: Option<IDWriteFontCollection> = None;
-        if dwrite
-            .GetSystemFontCollection(&mut collection, true)
-            .is_err()
-        {
+        // No rescan: that walks the font directory, and this runs up to four times per format.
+        // A font installed a moment ago is picked up the next time the format is rebuilt.
+        if dwrite.GetSystemFontCollection(&mut collection, false).is_err() {
             return false;
         }
         let Some(collection) = collection else {
@@ -305,10 +337,7 @@ fn family_available(dwrite: &IDWriteFactory, family: PCWSTR) -> bool {
         };
         let mut index = 0u32;
         let mut exists = BOOL(0);
-        if collection
-            .FindFamilyName(family, &mut index, &mut exists)
-            .is_err()
-        {
+        if collection.FindFamilyName(family, &mut index, &mut exists).is_err() {
             return false;
         }
         exists.as_bool()
@@ -323,29 +352,32 @@ fn text_metrics(dwrite: &IDWriteFactory, format: &IDWriteTextFormat, text: &str)
     Some(metrics)
 }
 
-/// Keep the window on the monitor the anchor is on: below the text if it fits, else above.
-fn clamp_to_monitor(hwnd: HWND, x: i32, y: i32, w: i32, h: i32) -> (i32, i32) {
+/// Where to put a window of `w` x `h` for text at `anchor`: just below it, on the monitor the text
+/// is on, and above it when there is no room below.
+///
+/// The monitor is the anchor's, found from the anchor itself. An earlier version asked which
+/// monitor the *window* was on, which for a window that had never been shown was whichever one
+/// held (0,0) -- so on a two-monitor desk the list could open on the wrong screen.
+fn place(anchor: &RECT, w: i32, h: i32) -> (i32, i32) {
+    let below = anchor.bottom + OFFSET_Y;
     unsafe {
-        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        let monitor = MonitorFromRect(anchor, MONITOR_DEFAULTTONEAREST);
         let mut info = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
             ..Default::default()
         };
         if GetMonitorInfoW(monitor, &mut info).as_bool() {
             let work = info.rcWork;
-            let mut nx = x.min(work.right - w).max(work.left);
-            let mut ny = y;
-            if ny + h > work.bottom {
-                // Above the line instead; the anchor's bottom minus roughly one line height.
-                ny = (y - OFFSET_Y - h - 22).max(work.top);
-            }
-            if nx < work.left {
-                nx = work.left;
-            }
-            return (nx, ny);
+            let x = anchor.left.min(work.right - w).max(work.left);
+            let y = if below + h > work.bottom {
+                (anchor.top - OFFSET_Y - h).max(work.top)
+            } else {
+                below
+            };
+            return (x, y);
         }
     }
-    (x, y)
+    (anchor.left, below)
 }
 
 impl Inner {
@@ -380,14 +412,9 @@ impl Inner {
         unsafe {
             let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).ok()?;
             // A font named in the config wins if it is installed; otherwise the built-in chain.
-            let chosen: Vec<u16> = config
-                .font_name
-                .trim()
-                .encode_utf16()
-                .chain(std::iter::once(0))
-                .collect();
-            let named = config.font_name.trim().is_empty().then_some(()).is_none()
-                && family_available(&dwrite, PCWSTR(chosen.as_ptr()));
+            let wanted = config.font_name.trim();
+            let chosen: Vec<u16> = wanted.encode_utf16().chain(std::iter::once(0)).collect();
+            let named = !wanted.is_empty() && family_available(&dwrite, PCWSTR(chosen.as_ptr()));
             let family = if named {
                 PCWSTR(chosen.as_ptr())
             } else {
@@ -397,7 +424,7 @@ impl Inner {
                     .find(|f| family_available(&dwrite, *f))
                     .unwrap_or(FONT_CHAIN[FONT_CHAIN.len() - 1])
             };
-            let size = if config.font_size >= 8.0 && config.font_size <= 48.0 {
+            let size = if (8.0..=48.0).contains(&config.font_size) {
                 config.font_size
             } else {
                 FONT_DIP
@@ -455,10 +482,60 @@ impl Inner {
         Some(())
     }
 
+    /// Measurements for every candidate, or None when text cannot be measured at all.
+    fn cells(&self) -> Option<Vec<CellMetrics>> {
+        let dwrite = self.dwrite.as_ref()?;
+        let format = self.format.as_ref()?;
+        self.content
+            .candidates
+            .iter()
+            .enumerate()
+            .map(|(i, word)| {
+                let n = text_metrics(dwrite, format, &number_label(i))?;
+                let w = text_metrics(dwrite, format, word)?;
+                Some(CellMetrics {
+                    number_width: n.width,
+                    word_width: w.width,
+                    height: n.height.max(w.height),
+                })
+            })
+            .collect()
+    }
+
+    /// Window size in pixels for the current content.
+    fn measure(&mut self) -> Option<(i32, i32)> {
+        self.ensure_dwrite()?;
+        let scale = self.scale();
+        let cells = self.cells()?;
+        let gaps = GAP * cells.len().saturating_sub(1) as f32;
+        let width = PAD_X * 2.0 + cells.iter().map(CellMetrics::width).sum::<f32>() + gaps;
+        let height = PAD_Y * 2.0 + cells.iter().map(|c| c.height).fold(0.0_f32, f32::max);
+        Some(((width * scale).ceil() as i32, (height * scale).ceil() as i32))
+    }
+
+    /// The pause timer fired: fetch the full ranking and, if it differs, redraw in place.
+    fn refine(&mut self) {
+        let Some(refiner) = self.refiner.as_ref() else { return };
+        let Some(content) = refiner() else { return };
+        if content.candidates == self.content.candidates && content.cursor == self.content.cursor {
+            return;
+        }
+        self.content = content;
+        let Some((w, h)) = self.measure() else { return };
+        unsafe {
+            // Same top-left, new size: the text has not moved, only the list under it.
+            let mut rc = RECT::default();
+            let _ = GetWindowRect(self.hwnd, &mut rc);
+            let _ = SetWindowPos(self.hwnd, Some(HWND_TOPMOST), rc.left, rc.top, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            let _ = InvalidateRect(Some(self.hwnd), None, false);
+        }
+    }
+
     fn paint(&mut self) {
         if self.ensure_dwrite().is_none() || self.ensure_target().is_none() {
             return;
         }
+        let Some(cells) = self.cells() else { return };
         let target = self.target.clone().expect("target");
         let dwrite = self.dwrite.clone().expect("dwrite");
         let format = self.format.clone().expect("format");
@@ -481,11 +558,17 @@ impl Inner {
             target.BeginDraw();
             target.Clear(Some(&theme.background as *const D2D1_COLOR_F));
 
-            let Ok(border) = target.CreateSolidColorBrush(&theme.border, None) else { let _ = target.EndDraw(None, None); return; };
-            let Ok(text) = target.CreateSolidColorBrush(&theme.text, None) else { let _ = target.EndDraw(None, None); return; };
-            let Ok(number) = target.CreateSolidColorBrush(&theme.number, None) else { let _ = target.EndDraw(None, None); return; };
-            let Ok(highlight) = target.CreateSolidColorBrush(&theme.highlight, None) else { let _ = target.EndDraw(None, None); return; };
-            let Ok(highlight_text) = target.CreateSolidColorBrush(&theme.highlight_text, None) else { let _ = target.EndDraw(None, None); return; };
+            let brushes = [
+                target.CreateSolidColorBrush(&theme.border, None),
+                target.CreateSolidColorBrush(&theme.text, None),
+                target.CreateSolidColorBrush(&theme.number, None),
+                target.CreateSolidColorBrush(&theme.highlight, None),
+                target.CreateSolidColorBrush(&theme.highlight_text, None),
+            ];
+            let [Ok(border), Ok(text), Ok(number), Ok(highlight), Ok(highlight_text)] = brushes else {
+                let _ = target.EndDraw(None, None);
+                return;
+            };
 
             let outline = D2D1_ROUNDED_RECT {
                 rect: D2D_RECT_F { left: 0.5, top: 0.5, right: width_dip - 0.5, bottom: height_dip - 0.5 },
@@ -495,47 +578,26 @@ impl Inner {
             target.DrawRoundedRectangle(&outline, &border, 1.0, None);
 
             let mut x = PAD_X;
-            let n = self.content.candidates.len();
-            for (i, c) in self.content.candidates.iter().enumerate() {
-                let full = label(i, c);
-                let Some(m) = text_metrics(&dwrite, &format, &full) else { continue };
+            for (i, (word, cell)) in self.content.candidates.iter().zip(&cells).enumerate() {
                 let selected = i == self.content.cursor;
                 if selected {
                     let pill = D2D1_ROUNDED_RECT {
                         rect: D2D_RECT_F {
-                            left: x - 6.0,
-                            top: PAD_Y - 3.0,
-                            right: x + m.width + 6.0,
-                            bottom: height_dip - PAD_Y + 3.0,
+                            left: x - PILL_X,
+                            top: PAD_Y - PILL_Y,
+                            right: x + cell.width() + PILL_X,
+                            bottom: height_dip - PAD_Y + PILL_Y,
                         },
                         radiusX: RADIUS - 2.0,
                         radiusY: RADIUS - 2.0,
                     };
                     target.FillRoundedRectangle(&pill, &highlight);
                 }
-                // Number in a quieter colour, then the word: two layouts so they can differ.
-                let num = number_label(i);
-                if let Some(nm) = text_metrics(&dwrite, &format, &num) {
-                    let wide: Vec<u16> = num.encode_utf16().collect();
-                    if let Ok(layout) = dwrite.CreateTextLayout(&wide, &format, 4096.0, height_dip) {
-                        target.DrawTextLayout(
-                            Vector2 { X: x, Y: 0.0 },
-                            &layout,
-                            if selected { &highlight_text } else { &number },
-                            D2D1_DRAW_TEXT_OPTIONS_NONE,
-                        );
-                    }
-                    let wide: Vec<u16> = c.encode_utf16().collect();
-                    if let Ok(layout) = dwrite.CreateTextLayout(&wide, &format, 4096.0, height_dip) {
-                        target.DrawTextLayout(
-                            Vector2 { X: x + nm.width + NUMBER_GAP, Y: 0.0 },
-                            &layout,
-                            if selected { &highlight_text } else { &text },
-                            D2D1_DRAW_TEXT_OPTIONS_NONE,
-                        );
-                    }
-                }
-                x += m.width + if i + 1 < n { GAP } else { 0.0 };
+                let number_brush = if selected { &highlight_text } else { &number };
+                let word_brush = if selected { &highlight_text } else { &text };
+                draw_text(&target, &dwrite, &format, &number_label(i), x, height_dip, number_brush);
+                draw_text(&target, &dwrite, &format, word, x + cell.number_width + NUMBER_GAP, height_dip, word_brush);
+                x += cell.width() + GAP;
             }
 
             if target.EndDraw(None, None).is_err() {
@@ -546,7 +608,27 @@ impl Inner {
     }
 }
 
+/// One run of text at `x`, vertically centred by the format's paragraph alignment.
+unsafe fn draw_text(
+    target: &ID2D1HwndRenderTarget,
+    dwrite: &IDWriteFactory,
+    format: &IDWriteTextFormat,
+    text: &str,
+    x: f32,
+    height_dip: f32,
+    brush: &ID2D1SolidColorBrush,
+) {
+    let wide: Vec<u16> = text.encode_utf16().collect();
+    if let Ok(layout) = dwrite.CreateTextLayout(&wide, format, 4096.0, height_dip) {
+        target.DrawTextLayout(Vector2 { X: x, Y: 0.0 }, &layout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+    }
+}
+
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    let inner = || {
+        let ptr = get_user_data(hwnd) as *const RefCell<Inner>;
+        if ptr.is_null() { None } else { Some(&*ptr) }
+    };
     match msg {
         WM_NCCREATE => {
             let create = &*(lparam.0 as *const CREATESTRUCTW);
@@ -554,13 +636,21 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_PAINT => {
-            let ptr = get_user_data(hwnd) as *const RefCell<Inner>;
-            if !ptr.is_null() {
-                if let Ok(mut inner) = (*ptr).try_borrow_mut() {
+            if let Some(cell) = inner() {
+                if let Ok(mut inner) = cell.try_borrow_mut() {
                     inner.paint();
                 }
             }
             let _ = ValidateRect(Some(hwnd), None);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == REFINE_TIMER_ID => {
+            let _ = KillTimer(Some(hwnd), REFINE_TIMER_ID);
+            if let Some(cell) = inner() {
+                if let Ok(mut inner) = cell.try_borrow_mut() {
+                    inner.refine();
+                }
+            }
             LRESULT(0)
         }
         WM_ERASEBKGND => LRESULT(1),
@@ -572,15 +662,4 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
-}
-
-#[allow(dead_code)]
-pub fn describe() -> &'static str {
-    // Used by the log at first paint, to make theme problems visible in shell.log.
-    if apps_use_dark_theme() { "dark" } else { "light" }
-}
-
-#[allow(dead_code)]
-fn _log_theme() {
-    log!("candidate window theme: {}", describe());
 }
