@@ -147,53 +147,62 @@ class SuggestService:
         return cached[0] if cached else ""
 
 
+def handle_request(svc: SuggestService, tel, raw: bytes) -> bytes:
+    """One request line in, one reply line out. Shared by both transports.
+
+    Never raises: a malformed request from one keyboard must not take down the connection, let alone
+    the engine that every other application is talking to.
+    """
+    try:
+        req = json.loads(raw.decode("utf-8"))
+        op = req.get("op", "suggest")
+        if op == "ping":
+            resp = {"ok": True, "version": __version__}
+        elif op == "suggest":
+            t = time.perf_counter()
+            cands, partial, strong = svc.suggest(
+                req.get("roman", ""),
+                tuple(req.get("context", ())),
+                int(req.get("k", 5)),
+                float(req.get("deadline_ms", DEFAULT_DEADLINE_MS)),
+            )
+            resp = {
+                "ok": True,
+                "candidates": cands,
+                "partial": partial,
+                "strong": strong,
+                "ms": round((time.perf_counter() - t) * 1000, 2),
+            }
+        elif op == "learn":
+            roman = req.get("roman", "")
+            chosen = req.get("chosen", "")
+            context = tuple(req.get("context", ()))
+            svc.learn(roman, chosen, context)
+            if tel is not None and tel.mode != "off":
+                tel.commit(
+                    roman,
+                    chosen,
+                    index=int(req.get("index", 0)),
+                    top1=req.get("top1") or svc.top_candidate(roman, context),
+                    app=req.get("app", ""),
+                    retyped=bool(req.get("retyped", False)),
+                    secure=bool(req.get("secure", False)),
+                    latency_ms=req.get("latency_ms"),
+                )
+            resp = {"ok": True}
+        else:
+            resp = {"ok": False, "error": f"unknown op {op!r}"}
+    except Exception as e:  # never let one bad request kill the connection
+        resp = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    return json.dumps(resp, ensure_ascii=False).encode("utf-8")
+
+
 class _Handler(socketserver.StreamRequestHandler):
     def handle(self) -> None:  # one connection may send many lines
         svc: SuggestService = self.server.service  # type: ignore[attr-defined]
+        tel = self.server.telemetry  # type: ignore[attr-defined]
         for raw in self.rfile:
-            try:
-                req = json.loads(raw.decode("utf-8"))
-                op = req.get("op", "suggest")
-                if op == "ping":
-                    resp = {"ok": True, "version": __version__}
-                elif op == "suggest":
-                    t = time.perf_counter()
-                    cands, partial, strong = svc.suggest(
-                        req.get("roman", ""),
-                        tuple(req.get("context", ())),
-                        int(req.get("k", 5)),
-                        float(req.get("deadline_ms", DEFAULT_DEADLINE_MS)),
-                    )
-                    resp = {
-                        "ok": True,
-                        "candidates": cands,
-                        "partial": partial,
-                        "strong": strong,
-                        "ms": round((time.perf_counter() - t) * 1000, 2),
-                    }
-                elif op == "learn":
-                    roman = req.get("roman", "")
-                    chosen = req.get("chosen", "")
-                    context = tuple(req.get("context", ()))
-                    svc.learn(roman, chosen, context)
-                    tel = self.server.telemetry  # type: ignore[attr-defined]
-                    if tel.mode != "off":
-                        tel.commit(
-                            roman,
-                            chosen,
-                            index=int(req.get("index", 0)),
-                            top1=req.get("top1") or svc.top_candidate(roman, context),
-                            app=req.get("app", ""),
-                            retyped=bool(req.get("retyped", False)),
-                            secure=bool(req.get("secure", False)),
-                            latency_ms=req.get("latency_ms"),
-                        )
-                    resp = {"ok": True}
-                else:
-                    resp = {"ok": False, "error": f"unknown op {op!r}"}
-            except Exception as e:  # never let one bad request kill the connection
-                resp = {"ok": False, "error": f"{type(e).__name__}: {e}"}
-            self.wfile.write((json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8"))
+            self.wfile.write(handle_request(svc, tel, raw) + b"\n")
             self.wfile.flush()
 
 
@@ -277,6 +286,25 @@ def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1") -> None:
                 telemetry.flush()
 
         threading.Thread(target=_flusher, daemon=True).start()
+
+        # The named pipe, alongside the socket. A Store application runs in an AppContainer and
+        # cannot open a loopback socket at all, so for Unigram, WhatsApp and Mail this is the only
+        # way the keyboard can reach the engine; see pipe.py for the two things that make it work.
+        # The socket stays for the development tools and for anything already speaking it.
+        if sys.platform == "win32":
+            try:
+                from likhi import pipe as pipe_transport
+
+                name = pipe_transport.serve(
+                    lambda raw: handle_request(srv.service, telemetry, raw),  # type: ignore[attr-defined]
+                    stop,
+                )
+                print(f"[likhi-server] listening on {name}", flush=True)
+            except Exception as e:
+                # Not fatal: desktop applications keep working over the socket, and the diagnostics
+                # will show which transport each one used.
+                print(f"[likhi-server] named pipe unavailable ({e}); socket only", flush=True)
+
         print(f"[likhi-server] listening on {host}:{port}", flush=True)
         try:
             srv.serve_forever()

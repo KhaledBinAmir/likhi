@@ -79,11 +79,22 @@ Write-Host "registered: $registered"
 $prof = "HKLM:\SOFTWARE\Microsoft\CTF\TIP\$clsid\LanguageProfile\0x00000845\{502AB3FE-5B7C-43E9-89D1-BE885846AE0D}"
 Write-Host "picker name: $((Get-ItemProperty $prof -ErrorAction SilentlyContinue).Description)"
 
+# The pipe first, because that is what the shell now tries first and the only transport a Store
+# application can use; the socket is checked too, since it is still the fallback.
+$session = (Get-Process -Id $PID).SessionId
+try {
+    $p = New-Object IO.Pipes.NamedPipeClientStream('.', "likhi-engine-s$session", [IO.Pipes.PipeDirection]::InOut)
+    $p.Connect(500)
+    $w = New-Object IO.StreamWriter($p); $r = New-Object IO.StreamReader($p)
+    $w.WriteLine('{"op":"ping"}'); $w.Flush()
+    Write-Host "engine (pipe): $($r.ReadLine())"; $p.Close()
+} catch { Write-Host "engine NOT responding on \\.\pipe\likhi-engine-s$session" }
+
 try {
     $c = New-Object Net.Sockets.TcpClient('127.0.0.1', 47123)
     $s = $c.GetStream(); $w = New-Object IO.StreamWriter($s); $r = New-Object IO.StreamReader($s)
     $w.WriteLine('{"op":"ping"}'); $w.Flush()
-    Write-Host "engine: $($r.ReadLine())"; $c.Close()
+    Write-Host "engine (socket): $($r.ReadLine())"; $c.Close()
 } catch { Write-Host "engine NOT responding on 127.0.0.1:47123" }
 
 if (-not $NoNotepad) {

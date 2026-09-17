@@ -8,8 +8,9 @@ publish = false
 
 # A COM in-process server. cdylib gives a plain DLL with C-callable exports and no Rust metadata,
 # which is what regsvr32 and the Text Services Framework expect to load into every application.
+# rlib alongside it so `cargo test` can link the crate; it changes nothing about the DLL produced.
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # Microsoft's own Win32 / COM bindings. The `implement` macro (from windows-core, re-exported as
@@ -24,6 +25,11 @@ windows = { version = "0.62", features = [
     "Win32_System_Registry",
     "Win32_Security",
     "Win32_System_SystemServices",
+    "Win32_System_Threading",     # the engine pipe: session id, event, timed wait
+    "Win32_Storage_FileSystem",   # ... opening and reading that pipe
+    "Win32_System_IO",            # ... overlapped I/O, so a read can have a deadline
+    "Win32_System_Pipes",         # ... and waiting when every pipe instance is busy
+    "Win32_System_RemoteDesktop", # ... ProcessIdToSessionId lives here, not under Threading
     "Win32_System_Variant",
     "Win32_System_Diagnostics_Debug",
     "Win32_UI_TextServices",
@@ -40,8 +46,8 @@ windows = { version = "0.62", features = [
 windows-core = "0.62"
 # Direct2D points and sizes are Vector2 from here; windows 0.62 has no D2D_POINT_2F alias.
 windows-numerics = "0.3"
-# The engine protocol is JSON lines over a local TCP socket, unchanged from the PIME shell, so the
-# Python engine keeps working without modification while the shell is replaced underneath it.
+# The engine protocol is JSON lines, over a named pipe where possible and a local socket otherwise;
+# the wire format is unchanged from the PIME shell, so the Python engine keeps working.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
