@@ -15,6 +15,7 @@ mod guids;
 mod log;
 mod registry;
 mod service;
+mod uielement;
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicPtr, Ordering};
