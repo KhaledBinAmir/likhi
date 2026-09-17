@@ -28,14 +28,7 @@ impl EditSession {
         client_id: u32,
         body: impl FnOnce(u32) -> Result<()> + 'static,
     ) -> Result<()> {
-        let session: ITfEditSession = EditSession {
-            body: RefCell::new(Some(Box::new(body))),
-        }
-        .into();
-        let hr = unsafe {
-            context.RequestEditSession(client_id, &session, TF_ES_SYNC | TF_ES_READWRITE)
-        }?;
-        hr.ok()
+        Self::request(context, client_id, TF_ES_SYNC | TF_ES_READWRITE, body)
     }
 
     /// Same, but read-only: asking where the composition is on screen must not claim a write lock,
@@ -45,12 +38,22 @@ impl EditSession {
         client_id: u32,
         body: impl FnOnce(u32) -> Result<()> + 'static,
     ) -> Result<()> {
+        Self::request(context, client_id, TF_ES_SYNC | TF_ES_READ, body)
+    }
+
+    fn request(
+        context: &ITfContext,
+        client_id: u32,
+        flags: TF_CONTEXT_EDIT_CONTEXT_FLAGS,
+        body: impl FnOnce(u32) -> Result<()> + 'static,
+    ) -> Result<()> {
         let session: ITfEditSession = EditSession {
             body: RefCell::new(Some(Box::new(body))),
         }
         .into();
-        let hr =
-            unsafe { context.RequestEditSession(client_id, &session, TF_ES_SYNC | TF_ES_READ) }?;
+        // Two results: the outer one says whether the request was accepted, the inner HRESULT is
+        // what the session itself returned. Both have to be good for the edit to have happened.
+        let hr = unsafe { context.RequestEditSession(client_id, &session, flags) }?;
         hr.ok()
     }
 }

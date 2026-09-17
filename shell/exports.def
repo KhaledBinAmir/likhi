@@ -4,7 +4,8 @@
 ; looks the functions up by plain name; a .def file pins the exported names on both targets.
 ; PRIVATE: exported from the DLL but kept out of the import library, which is what the linker asks
 ; for with COM entry points -- nothing links against them, they are found by name at run time.
-LIBRARY LikhiTextService
+; No LIBRARY line: cargo names the output likhi_tsf.dll and the installer renames it, and naming a
+; third thing here only earned a linker warning (LNK4070) on every build.
 EXPORTS
     DllMain PRIVATE
     DllGetClassObject PRIVATE

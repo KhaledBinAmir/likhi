@@ -31,11 +31,18 @@ use crate::service::TextService;
 
 static MODULE: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 
+/// This DLL's own module handle. A window class registered from a DLL must name the DLL, not the
+/// host executable, or the class refers to code that can go away underneath it.
+pub fn module_handle() -> HMODULE {
+    HMODULE(MODULE.load(Ordering::Relaxed))
+}
+
 fn module_path() -> String {
-    let mut buf = [0u16; 1024];
-    let handle = HMODULE(MODULE.load(Ordering::Relaxed));
-    let n = unsafe { GetModuleFileNameW(Some(handle), &mut buf) } as usize;
-    String::from_utf16_lossy(&buf[..n])
+    // Long enough for paths well past MAX_PATH; a truncated path would register a DLL that does
+    // not exist, which is a keyboard that silently never loads.
+    let mut buf = [0u16; 4096];
+    let n = unsafe { GetModuleFileNameW(Some(module_handle()), &mut buf) } as usize;
+    String::from_utf16_lossy(&buf[..n.min(buf.len())])
 }
 
 #[implement(IClassFactory)]
@@ -70,19 +77,23 @@ pub extern "system" fn DllMain(instance: HINSTANCE, reason: u32, _reserved: *mut
     BOOL(1)
 }
 
+/// `unsafe` because it dereferences pointers COM hands it, and the signature should say so; the
+/// export is the same either way.
+///
+/// # Safety
+/// Called by COM with `rclsid` and `riid` pointing at valid GUIDs and `object` at writable storage
+/// for one interface pointer. Nothing else calls it.
 #[no_mangle]
-pub extern "system" fn DllGetClassObject(
+pub unsafe extern "system" fn DllGetClassObject(
     rclsid: *const GUID,
     riid: *const GUID,
     object: *mut *mut c_void,
 ) -> HRESULT {
-    unsafe {
-        if rclsid.is_null() || *rclsid != CLSID_LIKHI {
-            return CLASS_E_CLASSNOTAVAILABLE;
-        }
-        let factory: IClassFactory = ClassFactory.into();
-        factory.query(riid, object)
+    if rclsid.is_null() || *rclsid != CLSID_LIKHI {
+        return CLASS_E_CLASSNOTAVAILABLE;
     }
+    let factory: IClassFactory = ClassFactory.into();
+    factory.query(riid, object)
 }
 
 #[no_mangle]

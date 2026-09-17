@@ -86,7 +86,8 @@ fn search_paths() -> Vec<PathBuf> {
     if let Some(pf) = std::env::var_os("ProgramFiles") {
         paths.push(PathBuf::from(pf).join("Likhi").join("config.json"));
     }
-    // The PIME layout, while both shells are installed.
+    // The PIME layout, which versions before 0.2.0 installed. Read for one more release so that a
+    // machine upgraded from one of those keeps its settings; remove once the pilot is past them.
     if let Some(pf86) = std::env::var_os("ProgramFiles(x86)") {
         paths.push(
             PathBuf::from(pf86)
@@ -124,13 +125,15 @@ fn read_object(path: &PathBuf) -> Option<serde_json::Map<String, serde_json::Val
 /// The candidate window watches this so a font chosen in the Likhi window takes effect while
 /// someone is typing, rather than at the next sign-in. Two `stat` calls, taken at most once a
 /// second and never on the path of a keystroke that is being handled.
-pub fn stamp() -> u64 {
+pub fn stamp() -> u128 {
+    // Nanoseconds, not seconds: two saves inside the same second -- pick a font, then a size --
+    // would otherwise look like no change at all, and the second choice would not take.
     search_paths()
         .iter()
         .filter_map(|p| std::fs::metadata(p).ok())
         .filter_map(|m| m.modified().ok())
         .filter_map(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
+        .map(|d| d.as_nanos())
         .max()
         .unwrap_or(0)
 }
