@@ -38,7 +38,7 @@ pub fn module_handle() -> HMODULE {
     HMODULE(MODULE.load(Ordering::Relaxed))
 }
 
-fn module_path() -> String {
+pub(crate) fn module_path() -> String {
     // Long enough for paths well past MAX_PATH; a truncated path would register a DLL that does
     // not exist, which is a keyboard that silently never loads.
     let mut buf = [0u16; 4096];
