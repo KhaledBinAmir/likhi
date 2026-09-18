@@ -1,5 +1,46 @@
 # Decision log
 
+## 2026-09-18: The Python is retired; the goldens become a fixed record
+
+- **Context.** After the engine was ported, the Python was kept as the reference implementation and
+  the research harness. That meant two implementations of every ranking decision, and a rule that
+  changing behaviour meant changing the Python first, re-recording goldens, then making the Rust
+  agree. With the harness itself ported, keeping the Python meant maintaining a second engine purely
+  to certify the first.
+- **Each tool was ported and cross-checked before anything was deleted.** Not by review; by running
+  both on the same data and requiring the same numbers. `words`: delta 0.0 on five metrics across
+  three datasets. `tune`: both report `start top1: feedback-words 78.26, macro 78.26`. `sentences`:
+  `wer=22.55  wer_bengali_tokens=22.57` from both. `replay`: `keystrokes=1368 saved_top1=4.24%
+  saved_top5=17.98% never_top1=12.33% never_top5=4.67%` from both. `stress` was checked at the
+  generator, since its output is a sample: the full 88-variant sequence from one seeded generator
+  matches, which is the check that catches a style consuming a different number of draws. `report`
+  was checked on the real four-install pilot: `show` identical, `collect` identical, and the 30-row
+  feedback file identical byte for byte.
+- **The goldens can no longer be regenerated, on purpose.** They are 96,537 recorded results that a
+  second, independent implementation once agreed with. Frozen, they are a stronger guarantee than a
+  file that can be re-recorded whenever the engine changes: a change that moves one now has to be
+  justified in the commit that moves it. What is lost is the ability to add new golden coverage for
+  existing behaviour, which is a real cost and is accepted.
+- **What stays in Python, and why it is not an exception.** `server/ingest_server.py` runs in a
+  container, not on anyone's machine, so none of the reasons for the port apply to it. `scripts/`
+  prepares data and drives builds on a developer's machine; `build_rust_data.py` converts model
+  weights in NumPy and writes the result into the blob the engine maps, so the arithmetic happens
+  once, here, rather than at every startup. The rule is not "no Python" but "nothing on a user's
+  machine is Python".
+- **Coverage was moved, not dropped.** Deleting 13 Python test files would have quietly removed
+  coverage of things that had already failed once in production, so those were ported first: config
+  discovery and the per-user override (9 tests, including the byte-order-mark case that silently
+  disabled telemetry on fresh installs), the privacy guarantees of each telemetry mode (5 tests),
+  and the ad-hoc sync rule (4 tests). The ingest server keeps its own tests in Python; the client
+  half of that conversation moved to `engine/tests/ingest.rs`.
+- **Two real bugs were found by doing this rather than by reading.** `likhi-report sync --drop`
+  would have advanced a live install's sync offsets, so telemetry shipped to a debug folder would
+  never have reached the collector -- the exact failure the Python's `sync_state` tests were written
+  about after it happened once. And `pyrandom`'s `randbelow` computed its bit length against a
+  64-bit width for a 32-bit value, making it 32 too large for every input; a release build masks the
+  resulting over-wide shift back onto the intended amount, so every result was correct and nothing
+  failed until a debug build ran the assertion.
+
 Short records of choices that are not obvious from the code. Newest first.
 
 ## 2026-09-18: The lexicon is built in Rust, and marisa leaves the build
@@ -69,6 +110,7 @@ Short records of choices that are not obvious from the code. Newest first.
 - **What stays in Python.** `src/likhi/eval` and `src/likhi/data`: the research harness and the
   dataset builders, where Python is the right tool and nothing ships. `src/likhi/` remains the
   reference implementation and is what the goldens are generated from.
+  *(Superseded 2026-09-18 by the entry below: the harness was ported too and the Python deleted.)*
 
 ## 2026-09-16: Transliteration model runs in pure NumPy, not CTranslate2
 

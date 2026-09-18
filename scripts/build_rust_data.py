@@ -264,10 +264,32 @@ class WeightWriter:
         log(f"{path.name}: {len(self.arrays)} arrays, {path.stat().st_size / 1e6:.1f} MB")
 
 
-def convert_model(model_dir: Path, out_dir: Path, max_positions: int) -> None:
+def sinusoidal(num_positions: int, dim: int, padding_idx: int = 1):
+    """fairseq's SinusoidalPositionalEmbedding table; row p is position p.
+
+    Inlined from the Python engine's xlit_np, which has been retired. It stays in NumPy rather than
+    moving to Rust because it runs once, here, and its output is written into the weight blob: the
+    engine reads the table rather than recomputing it, so there is no second implementation that
+    could round differently.
+    """
+    import math
+
     import numpy as np
 
-    from likhi.engine.xlit_np import sinusoidal
+    half = dim // 2
+    scale = math.log(10000) / (half - 1)
+    freqs = np.exp(np.arange(half, dtype=np.float32) * -scale)
+    n = num_positions + padding_idx + 1
+    pos = np.arange(n, dtype=np.float32)[:, None] * freqs[None, :]
+    emb = np.concatenate([np.sin(pos), np.cos(pos)], axis=1)
+    if dim % 2:
+        emb = np.concatenate([emb, np.zeros((n, 1), np.float32)], axis=1)
+    emb[padding_idx] = 0
+    return emb.astype(np.float32)
+
+
+def convert_model(model_dir: Path, out_dir: Path, max_positions: int) -> None:
+    import numpy as np
 
     cfg = json.loads((model_dir / "config.json").read_text(encoding="utf-8"))
     dim = int(cfg["dim"])

@@ -50,60 +50,62 @@ socket at all.
 
 ## Repository layout
 
-Two implementations of the same engine, on purpose.
-
 ```
-engine/             the engine that ships: Rust, one binary, no interpreter
+engine/             the engine: Rust, one binary, no interpreter
 shell/              the Windows text service: Rust, a TSF DLL for each architecture
 app/                the settings window (C#, WinForms)
 installer/          Inno Setup script and the keyboard setup scripts
 
-src/likhi/          the reference implementation, in Python
-src/likhi/eval/     evaluation harness, metrics, baselines, personal test set tools
-
-scripts/            dataset download, model conversion, golden generation, builds
-tests/goldens/      recorded Python behaviour that the Rust must reproduce
+server/             the telemetry ingest service (Python, runs in a container)
+scripts/            dataset download, model conversion, builds
+tests/goldens/      recorded behaviour the engine must reproduce
 docs/               plan, research notes, design decisions
 data/               datasets (raw/processed are git-ignored; see scripts/fetch_datasets.py)
 results/            evaluation results tracked over time
 ```
 
-The Python is not dead code. It is the reference the Rust is tested against and the harness the
-research is done in: `scripts/dump_goldens.py` records roughly 96,500 of its results and
-`engine/tests/goldens.rs` requires the Rust engine to return the same thing. Changing suggestion
-behaviour means changing the Python, re-recording, and making the Rust agree.
+Everything that runs on someone's machine is Rust: the engine, the text service, the lexicon
+builder, the evaluation harness, the tuner, the stress tool and the telemetry operator tool. What
+is left in Python is the ingest service, which runs in a container rather than on a machine, and
+the scripts that prepare data on a developer's machine.
+
+It began as a Python engine with a Rust port beside it. Each tool was moved only once it produced
+the same numbers as the one it replaced, and the Python was deleted after the last of them did.
+`engine/tests/goldens.rs` replays 96,537 of the original's recorded results and requires the engine
+to return the same thing. Those files cannot be regenerated, which is deliberate: they are a fixed
+record of behaviour that a second implementation once agreed with, so a change that moves them has
+to be argued for rather than re-recorded away.
 
 ## Development
 
-The engine and shell need the Rust toolchain and the Visual Studio Build Tools C++ workload; the
-research side needs Python 3.12 and [uv](https://docs.astral.sh/uv/).
+The engine and shell need the Rust toolchain and the Visual Studio Build Tools C++ workload.
+Preparing data and running the builds needs Python 3.12 and [uv](https://docs.astral.sh/uv/).
 
 ```
+cd engine && cargo test --release --features tools    # the engine's own tests and the goldens
 uv sync --all-extras
-uv run python scripts/fetch_datasets.py --all                      # datasets + IndicXlit checkpoint
+uv run python scripts/fetch_datasets.py --all         # datasets + IndicXlit checkpoint
 uv run python scripts/convert_indicxlit.py --src data/raw/indicxlit --npz models/indicxlit-np
-uv run likhi-eval words --system likhi --dataset dakshina-test      # measure (Python reference)
-uv run pytest                                                       # the Python engine's own tests
+uv run pytest                                         # ingest service, key map, file encodings
 ```
 
 Building the data the engine loads:
 
 ```
 cd engine
-cargo run --release --features build --bin likhi-lexicon -- \
+cargo run --release --features tools --bin likhi-lexicon -- \
     --raw ../data/raw --out ../models/rust/lexicon      # unigrams, romanizations, keys, bigrams
 cd ..
-uv run python scripts/build_rust_data.py --skip-tries   # model weights and the Avro rules
+uv run python scripts/build_rust_data.py               # model weights and the Avro rules
 ```
 
-The lexicon builder is Rust and writes the `.lkx` tables directly, which is what removed
-`marisa_trie` from the build. It refuses to run without `weights.json`, the tuned ranker weights
-produced by `likhi-tune`: they are not a build output, and a lexicon missing them costs about seven
-points of top-1 silently.
+The lexicon builder writes the `.lkx` tables directly. It refuses to run without `weights.json`,
+the tuned ranker weights produced by `likhi-tune`: they are not a build output, and a lexicon
+missing them costs about seven points of top-1 silently.
 
-`build_rust_data.py` still converts the transliteration model and the Avro rule tables, because
-their sources are a NumPy `.npz` and a Python module. It can also convert old `.marisa` tries with
-`--skip-model --skip-avro`, which is now only useful for comparing the two builders.
+`build_rust_data.py` converts the transliteration model and the Avro rule tables, and stays in
+Python because its sources are a NumPy `.npz` and a Python module. It runs once per model, on a
+developer machine, and its output is what the engine maps.
 
 Measuring and tuning, which is where ranking work happens:
 
@@ -111,7 +113,7 @@ Measuring and tuning, which is where ranking work happens:
 cd engine
 cargo build --release --features tools
 
-# accuracy: ~2 minutes across all cores, against ~12 in Python
+# accuracy: ~2 minutes across all cores
 target/release/likhi-eval words --dataset dakshina-dev
 
 # ranker weights: cache features once, then search over weights in seconds
@@ -126,15 +128,24 @@ produce worse ones; use `--out` to write elsewhere while experimenting.
 Building what ships:
 
 ```
-uv run python scripts/dump_goldens.py       # record the Python's behaviour
-cd engine && cargo test --release           # require the Rust to reproduce it
+cd engine && cargo test --release --features tools   # including the goldens
+cd ..
 uv run python scripts/build_engine.py       # dist/engine
 uv run python scripts/build_shell.py        # dist/shell (x64 and x86)
 uv run python scripts/build_app.py          # dist/Likhi.exe
 ISCC.exe installer/likhi.iss                # dist/LikhiSetup-<version>.exe
 ```
 
-Baselines and results live in `results/` and are summarized by `uv run likhi-eval report`.
+Baselines and results live in `results/` and are summarized by `likhi-eval report`.
+
+Telemetry from a pilot is handled by `likhi-report`, which is also Rust and also behind the `tools`
+feature, so it is never part of an installation:
+
+```
+target/release/likhi-report show                       # what this machine holds, shares nothing
+target/release/likhi-report pull --out pilot           # needs the admin key, never shipped
+target/release/likhi-report collect --drop pilot --out feedback.jsonl
+```
 
 ## Data and model licenses
 

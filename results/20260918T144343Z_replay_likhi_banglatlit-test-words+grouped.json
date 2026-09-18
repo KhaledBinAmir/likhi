@@ -1,0 +1,20 @@
+{
+ "kind": "replay",
+ "system": "likhi",
+ "dataset": "banglatlit-test-words+grouped",
+ "k": 5,
+ "n": 300,
+ "keystrokes": 1368,
+ "saved_top1_pct": 4.239766081871345,
+ "saved_top5_pct": 17.982456140350877,
+ "never_top1_pct": 12.333333333333334,
+ "never_top5_pct": 4.666666666666667,
+ "latency_ms": {
+  "p50": 91.81160000025557,
+  "p95": 121.36779999946157,
+  "p99": 139.43689999996423,
+  "mean": 60.934693893119146
+ },
+ "git": "d4c9ddb",
+ "when": "2026-09-18T14:43:43+00:00"
+}

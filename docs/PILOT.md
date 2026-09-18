@@ -233,11 +233,18 @@ with no endpoint.
 
 ## Looking at the data
 
+`likhi-report` is Rust, behind the `tools` feature, so it is never part of an installation. Build
+it once with `cd engine && cargo build --release --features tools`; it lands in
+`engine/target/release/likhi-report.exe`. The commands below are written without the path.
+
 On a tester's machine, showing them exactly what would leave it:
 
 ```
 likhi-report show
 ```
+
+The files themselves are plain JSON Lines in `%LOCALAPPDATA%\Likhi`, so a tester who would rather
+read them in Notepad than trust a tool can.
 
 On your machine, pulling from the endpoint (or pointed at a drop folder):
 
@@ -246,6 +253,10 @@ likhi-report pull --out pilot          # uses pilot.local.json
 likhi-report collect --drop pilot
 likhi-report collect --drop pilot --out pilot-words.jsonl
 ```
+
+`sync` given a `--drop` or `--endpoint` that is not the configured one ships a copy without
+recording progress, so a one-off copy to a debug folder cannot consume telemetry the collector has
+not yet received.
 
 `collect` prints per-install health and the struggle words ranked by **how many different installs
 hit them**. Words seen on only one install are held back by default (`--min-installs 2`), because

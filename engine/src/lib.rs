@@ -1,16 +1,21 @@
 //! The Likhi suggestion engine.
 //!
-//! A port of the Python engine in `src/likhi/`, module for module, with the same names so the two
-//! can be read side by side. The Python remains the reference implementation and the research
-//! harness (`src/likhi/eval/`) still drives it; this crate is what ships.
+//! Originally a port of a Python engine, module for module and name for name. That Python is gone:
+//! everything it did -- the engine, the lexicon builder, the evaluation harness, the tuner, the
+//! stress tool, the telemetry operator tool -- now lives here, and this crate is the only
+//! implementation.
 //!
-//! The port exists to remove an embedded CPython and NumPy -- about 65 MB and a cold start -- from
-//! every installation, not to change any behaviour. Correctness is therefore defined as agreement
-//! with the Python: `tests/goldens.rs` replays vectors dumped from it by
-//! `scripts/dump_goldens.py`, and string and integer results must match exactly. Only the
-//! transformer's float32 outputs are allowed to differ, and only in the last bits, because a
-//! different summation order is unavoidable; those are checked on ranking, which is what a typist
-//! actually experiences.
+//! The port existed to remove an embedded CPython and NumPy, about 65 MB and a cold start, from
+//! every installation, and not to change any behaviour. Correctness was therefore defined as exact
+//! agreement with the Python, and that agreement is what `tests/goldens.rs` still asserts: 96,537
+//! recorded cases covering every module, where string and integer results must match to the
+//! character. Only the transformer's float32 outputs were ever allowed to differ, and only in the
+//! last bits, because a different summation order is unavoidable; those are checked on ranking,
+//! which is what a typist actually experiences.
+//!
+//! The goldens can no longer be regenerated, which is the price of the deletion and is deliberate:
+//! they are now a fixed record of behaviour that was verified against a second implementation, and
+//! a change that moves them has to be justified on its own terms rather than by re-recording.
 
 pub mod avro;
 pub mod core;

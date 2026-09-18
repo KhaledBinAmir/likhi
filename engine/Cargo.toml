@@ -39,6 +39,14 @@ name = "likhi-stress"
 path = "src/bin/stress.rs"
 required-features = ["tools"]
 
+# The telemetry operator tool. Behind `tools` like the rest and so absent from the installer, which
+# matches what shipped before: the Python `likhi-report` was always run from a checkout. It needs no
+# extra dependencies -- WinHTTP and serde_json are already here for the engine itself.
+[[bin]]
+name = "likhi-report"
+path = "src/bin/report.rs"
+required-features = ["tools"]
+
 [features]
 tools = ["dep:flate2", "dep:csv"]
 

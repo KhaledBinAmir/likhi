@@ -288,7 +288,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--npz",
         type=Path,
-        help="instead of CTranslate2, write a NumPy weight bundle for likhi.engine.xlit_np (model.npz + vocab)",
+        help="instead of CTranslate2, write a NumPy weight bundle (model.npz + vocab), which build_rust_data.py turns into the blob the engine maps",
     )
     args = ap.parse_args(argv)
 
