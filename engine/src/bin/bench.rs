@@ -1,4 +1,4 @@
-﻿//! Latency of the engine's two paths, which is the whole reason the port exists.
+//! Latency of the engine's two paths, which is the whole reason the port exists.
 //!
 //!     cargo run --release --bin bench
 //!

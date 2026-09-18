@@ -19,6 +19,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from likhi import lkx
 from likhi.engine.romankey import key_from_bangla, key_from_roman
 from likhi.engine.textnorm import canonical, normalize_roman, to_output
 
@@ -178,26 +179,38 @@ class LikhiEngine:
     ) -> None:
         """``personal``: a PersonalStore, or None to disable learning (evaluation runs).
         ``personal_path``: create a PersonalStore at this path (default location when "default")."""
-        import marisa_trie
-
         lexicon_dir = Path(lexicon_dir)
-        self.uni = marisa_trie.RecordTrie("<III")
-        self.uni.load(str(lexicon_dir / "unigrams.marisa"))
-        self.romans = marisa_trie.RecordTrie("<Ib")
-        self.romans.load(str(lexicon_dir / "romans.marisa"))
-        self.keys = marisa_trie.RecordTrie("<I")
-        self.keys.load(str(lexicon_dir / "keys.marisa"))
-        self.prefixes = None
-        if (lexicon_dir / "prefixes.marisa").exists():
-            self.prefixes = marisa_trie.RecordTrie("<I")
-            self.prefixes.load(str(lexicon_dir / "prefixes.marisa"))
-        self.bigrams = None
-        self.bigram_totals = None
-        if (lexicon_dir / "bigrams.marisa").exists():
-            self.bigrams = marisa_trie.RecordTrie("<I")
-            self.bigrams.load(str(lexicon_dir / "bigrams.marisa"))
-            self.bigram_totals = marisa_trie.RecordTrie("<I")
-            self.bigram_totals.load(str(lexicon_dir / "bigram_totals.marisa"))
+
+        # Two table formats, chosen per directory. `.lkx` is what the Rust engine reads and what
+        # the Rust lexicon builder emits; `.marisa` is the original. Both are supported so that the
+        # two engines can be measured on identical data while the builder is being moved over --
+        # without this, a lexicon built by the Rust side could not be evaluated at all, because the
+        # evaluation harness drives this engine.
+        use_lkx = lkx.exists(lexicon_dir, "unigrams")
+
+        def load(name: str, fmt: str, optional: bool = False):
+            if use_lkx:
+                if optional and not lkx.exists(lexicon_dir, name):
+                    return None
+                return lkx.open_table(lexicon_dir, name, fmt)
+            import marisa_trie
+
+            path = lexicon_dir / f"{name}.marisa"
+            if optional and not path.exists():
+                return None
+            trie = marisa_trie.RecordTrie(fmt)
+            trie.load(str(path))
+            return trie
+
+        self.lexicon_format = "lkx" if use_lkx else "marisa"
+        self.uni = load("unigrams", "<III")
+        self.romans = load("romans", "<Ib")
+        self.keys = load("keys", "<I")
+        self.prefixes = load("prefixes", "<I", optional=True)
+        self.bigrams = load("bigrams", "<I", optional=True)
+        self.bigram_totals = (
+            load("bigram_totals", "<I", optional=True) if self.bigrams is not None else None
+        )
         # normalizer for the unigram mixture
         total = 0
         for _w, (a, b, c) in self.uni.items():

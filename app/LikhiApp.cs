@@ -1,4 +1,4 @@
-﻿// The Likhi window: what people open from the Start menu after installing.
+// The Likhi window: what people open from the Start menu after installing.
 //
 // It exists because installing a keyboard leaves nothing to click, and everyone looks for an app.
 // Pilot users searched the Start menu, found nothing, and had no way to tell a working install from

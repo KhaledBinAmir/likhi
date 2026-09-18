@@ -16,6 +16,17 @@ path = "src/lib.rs"
 name = "likhi-server"
 path = "src/bin/server.rs"
 
+# The lexicon builder. A developer tool, not part of the product, so its dependencies -- gzip and a
+# CSV reader, needed only to read the source corpora -- are optional and the `build` feature is off
+# by default. Nothing here reaches the engine that ships.
+[[bin]]
+name = "likhi-lexicon"
+path = "src/bin/lexicon.rs"
+required-features = ["build"]
+
+[features]
+build = ["dep:flate2", "dep:csv"]
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -27,6 +38,11 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # NFC. The Bengali rules in textnorm depend on canonical composition behaving exactly as Python's
 # unicodedata does, including decomposing the three nukta letters, which are composition exclusions.
 unicode-normalization = "0.1"
+
+# Used only by the lexicon builder (feature "build"). flate2's pure-Rust backend on purpose: the
+# builder should not need a C toolchain beyond what the rest of the crate already does.
+flate2 = { version = "1", optional = true, default-features = false, features = ["rust_backend"] }
+csv = { version = "1", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

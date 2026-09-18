@@ -88,10 +88,24 @@ uv run likhi-eval words --system likhi --dataset dakshina-test      # measure
 uv run pytest                                                       # the Python engine's own tests
 ```
 
+Building the data the engine loads:
+
+```
+cd engine
+cargo run --release --features build --bin likhi-lexicon -- \
+    --raw ../data/raw --out ../models/rust/lexicon      # unigrams, romanizations, keys, bigrams
+cd ..
+uv run python scripts/build_rust_data.py --skip-tries   # model weights and the Avro rules
+```
+
+The lexicon builder is Rust and writes the `.lkx` tables directly. `build_rust_data.py` still
+converts the transliteration model and the Avro rule tables, because their sources are a NumPy
+`.npz` and a Python module; it can also convert old `.marisa` tries with `--skip-model --skip-avro`,
+which is only useful for comparing the two builders.
+
 Building what ships:
 
 ```
-uv run python scripts/build_rust_data.py    # tries and weights -> formats Rust can map
 uv run python scripts/dump_goldens.py       # record the Python's behaviour
 cd engine && cargo test --release           # require the Rust to reproduce it
 uv run python scripts/build_engine.py       # dist/engine
