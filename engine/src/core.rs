@@ -17,6 +17,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use crate::avro::Avro;
 use crate::lexicon::{rec_u32, rec_u32_i8, rec_u32x3, Table};
@@ -206,8 +208,21 @@ pub struct Engine {
     model_scored: usize,
     xlit: Option<Xlit>,
     avro: Option<Avro>,
-    pub personal: Option<PersonalStore>,
+    /// Behind a mutex rather than owned mutably, so the whole engine is `Sync` and `suggest` takes
+    /// `&self`.
+    ///
+    /// This is what lets the fast path run while the model worker is busy, which is the entire
+    /// latency design: the Python gets the same property for free, because NumPy releases the GIL
+    /// and marisa and SQLite are safe across threads. Taking `&mut self` here would have serialised
+    /// every keystroke behind the model -- the Python notes measuring exactly that, 120 ms round
+    /// trips instead of 12, when a lock was held around the model call.
+    personal: Option<Mutex<PersonalStore>>,
 }
+
+/// Raised when a suggestion was abandoned because newer input arrived. The Python uses an exception
+/// (`AbortedError`); here it is an absent result.
+#[derive(Debug)]
+pub struct Aborted;
 
 pub struct EngineOptions {
     pub beam: usize,
@@ -299,7 +314,7 @@ impl Engine {
             model_scored: opts.model_scored,
             xlit,
             avro,
-            personal: opts.personal,
+            personal: opts.personal.map(Mutex::new),
         })
     }
 
@@ -345,11 +360,27 @@ impl Engine {
         }
     }
 
-    pub fn candidates(&mut self, roman: &str, use_model: bool) -> FeatTable {
+    pub fn candidates(&self, roman: &str, use_model: bool) -> FeatTable {
+        self.candidates_abortable(roman, use_model, None)
+            .expect("no abort flag was given, so this cannot be abandoned")
+    }
+
+    /// Gather candidates, giving up if `abort` is raised between the expensive stages.
+    ///
+    /// The checks sit exactly where the Python's do: before the beam search and before the batched
+    /// candidate scoring, which are the only two steps that cost real time. Everything else is
+    /// table lookups and finishes before a check would be worth making.
+    pub fn candidates_abortable(
+        &self,
+        roman: &str,
+        use_model: bool,
+        abort: Option<&AtomicBool>,
+    ) -> Result<FeatTable, Aborted> {
+        let give_up = || abort.is_some_and(|a| a.load(Ordering::Relaxed));
         let r = normalize_roman(roman);
         let mut t = FeatTable::default();
         if r.is_empty() {
-            return t;
+            return Ok(t);
         }
 
         // 1. attested romanizations: exact, then completions.
@@ -491,6 +522,9 @@ impl Engine {
         // 3. transliteration model. The encoder runs once and is shared with the scoring pass below.
         let enc = match (&self.xlit, use_model) {
             (Some(x), true) => {
+                if give_up() {
+                    return Err(Aborted);
+                }
                 let enc = x.encode(&r, "bn");
                 for (rank, (word, lp)) in
                     x.beam_search(&r, self.beam, self.beam, &enc).into_iter().enumerate()
@@ -523,8 +557,14 @@ impl Engine {
         }
 
         // 5. personal history, including the raw Latin the user may have chosen before.
-        if self.personal.is_some() {
-            let sel = self.personal.as_mut().expect("checked").selections(&r, None);
+        //
+        // The store is moved out for the duration: it needs `&mut` while the rest of this needs
+        // `&self` for the lexicon, and taking it is cheaper than splitting the struct or reaching
+        // for interior mutability. `panic = "abort"` means there is no unwinding path that could
+        // leave it taken.
+        if let Some(store) = &self.personal {
+            let mut p = store.lock().unwrap_or_else(|e| e.into_inner());
+            let sel = p.selections(&r, None);
             let total: f64 = sel.iter().map(|(_, c)| *c).sum();
             let total = if total == 0.0 { 1.0 } else { total };
             for (word, count) in &sel {
@@ -537,11 +577,9 @@ impl Engine {
                 t.feats[i].personal_share = count / total;
                 t.feats[i].sources.insert("personal");
             }
-            let words: Vec<String> = t.order.clone();
-            for (idx, word) in words.iter().enumerate() {
+            for idx in 0..t.feats.len() {
                 if !t.feats[idx].is_latin {
-                    let c = self.personal.as_mut().expect("checked").word_count(word, None);
-                    t.feats[idx].personal_word = c;
+                    t.feats[idx].personal_word = p.word_count(&t.order[idx], None);
                 }
             }
         }
@@ -549,6 +587,9 @@ impl Engine {
         // Model scores for the most promising candidates only: batched teacher forcing is the
         // expensive step, everything else was a table lookup.
         if let (Some(x), Some(enc), true) = (&self.xlit, &enc, !t.is_empty()) {
+            if give_up() {
+                return Err(Aborted);
+            }
             let mut unscored: Vec<usize> =
                 (0..t.feats.len()).filter(|&i| t.feats[i].xlit_logp.is_nan()).collect();
             // Stable, so equal scores keep insertion order, as Python's sorted does.
@@ -572,7 +613,7 @@ impl Engine {
             }
         }
 
-        t
+        Ok(t)
     }
 
     fn score_inner(&self, word: &str, ft: &Feats, context: &[String]) -> f64 {
@@ -653,12 +694,24 @@ impl Engine {
     }
 
     /// Ranked candidates. `fast` skips the transliteration model.
-    pub fn suggest(&mut self, roman: &str, context: &[String], k: usize, fast: bool) -> Vec<String> {
+    pub fn suggest(&self, roman: &str, context: &[String], k: usize, fast: bool) -> Vec<String> {
+        self.suggest_abortable(roman, context, k, fast, None)
+            .expect("no abort flag was given, so this cannot be abandoned")
+    }
+
+    pub fn suggest_abortable(
+        &self,
+        roman: &str,
+        context: &[String],
+        k: usize,
+        fast: bool,
+        abort: Option<&AtomicBool>,
+    ) -> Result<Vec<String>, Aborted> {
         let r = normalize_roman(roman);
         let prev: Vec<String> = context.last().map(|c| vec![canonical(c)]).unwrap_or_default();
-        let t = self.candidates(&r, !fast);
+        let t = self.candidates_abortable(&r, !fast, abort)?;
         if t.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let extra = if fast { self.w.get("rom_exact_fast") } else { 0.0 };
         let mut idx: Vec<usize> = (0..t.feats.len()).collect();
@@ -672,7 +725,7 @@ impl Engine {
         idx.sort_by(|&a, &b| {
             scored[b].partial_cmp(&scored[a]).unwrap_or(std::cmp::Ordering::Equal)
         });
-        idx.into_iter().take(k).map(|i| to_output(&t.order[i])).collect()
+        Ok(idx.into_iter().take(k).map(|i| to_output(&t.order[i])).collect())
     }
 
     /// Model-free ranking plus a confidence flag, from one pass over the table channels.
@@ -689,12 +742,7 @@ impl Engine {
     /// typed. Only applied when something is well attested for this exact spelling, because when
     /// the best evidence is a single occurrence that candidate may be all there is -- and demoted
     /// rather than removed, so they still fill slots nothing better is competing for.
-    pub fn fast_suggest(
-        &mut self,
-        roman: &str,
-        context: &[String],
-        k: usize,
-    ) -> (Vec<String>, bool) {
+    pub fn fast_suggest(&self, roman: &str, context: &[String], k: usize) -> (Vec<String>, bool) {
         let r = normalize_roman(roman);
         let prev: Vec<String> = context.last().map(|c| vec![canonical(c)]).unwrap_or_default();
         let t = self.candidates(&r, false);
@@ -722,17 +770,18 @@ impl Engine {
     }
 
     /// True when the table channels alone have solid evidence -- an attested spelling.
-    pub fn has_strong_match(&mut self, roman: &str) -> bool {
+    pub fn has_strong_match(&self, roman: &str) -> bool {
         self.fast_suggest(roman, &[], 1).1
     }
 
     /// Record a commit so the personal model learns from it.
-    pub fn learn(&mut self, roman: &str, chosen: &str) {
+    pub fn learn(&self, roman: &str, chosen: &str) {
         if roman.is_empty() || chosen.is_empty() {
             return;
         }
         let r = normalize_roman(roman);
-        if let Some(p) = self.personal.as_mut() {
+        if let Some(store) = &self.personal {
+            let mut p = store.lock().unwrap_or_else(|e| e.into_inner());
             let _ = p.learn(&r, chosen, None);
         }
     }

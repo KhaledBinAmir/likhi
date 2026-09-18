@@ -49,7 +49,8 @@ if (Test-Path $root) {
     Write-Host "  FOUND $root"
     foreach ($f in @("shell\x64\LikhiTextService.dll", "shell\x86\LikhiTextService.dll",
                      "shell\x64\likhi.ico", "config.json", "Likhi.exe",
-                     "runtime\likhi-server.cmd", "runtime\models\lexicon\unigrams.marisa")) {
+                     "engine\likhi-server.exe", "engine\models\lexicon\unigrams.lkx",
+                     "engine\models\indicxlit\model.lkw")) {
         $p = Join-Path $root $f
         if (Test-Path $p) { Write-Host "    ok      $f" } else { Write-Host "    MISSING $f" }
     }
@@ -104,7 +105,9 @@ try { Write-Host "  default input method: $((Get-WinDefaultInputMethodOverride).
 Section "5. Processes"
 # Only the engine now: the text service is a DLL Windows loads into each application itself, so
 # there is no launcher and no separate backend process to look for.
-foreach ($n in 'pythonw', 'python') {
+# likhi-server is the engine since 0.3; pythonw is what an older install left behind, and it is
+# worth reporting because it would still be holding the port.
+foreach ($n in 'likhi-server', 'pythonw', 'python') {
     $procs = Get-Process $n -ErrorAction SilentlyContinue
     if ($procs) { $procs | ForEach-Object { Write-Host "  $n  pid=$($_.Id)  $($_.Path)" } }
     else { Write-Host "  $n not running" }

@@ -176,7 +176,10 @@ pub fn relu_inplace(x: &mut [f32]) {
 /// `causal` applies fairseq's mask: position i may not attend beyond `tk - tq + i`. With tq == tk
 /// that is the ordinary lower triangle; with tq == 1 (an incremental decode step) nothing is
 /// masked, which is why the step path passes false.
-#[allow(clippy::too_many_arguments)]
+// `scratch` is a `&mut Vec` on purpose: attention resizes it to the key length, which varies per
+// call as the decoder's cache grows, and the caller reuses one buffer across every layer and step.
+// A slice cannot grow, and allocating per call would put a malloc inside the innermost loop.
+#[allow(clippy::too_many_arguments, clippy::ptr_arg)]
 pub fn attention(
     q: &[f32],
     k: &[f32],

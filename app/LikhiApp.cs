@@ -156,7 +156,7 @@ namespace Likhi
                 // removed either way, or it would run a program that is no longer installed.
                 try { k.DeleteValue("LikhiLauncher", false); } catch { }
                 if (on)
-                    k.SetValue("LikhiEngine", "\"" + Path.Combine(AppDir, @"runtime\likhi-server.cmd") + "\"");
+                    k.SetValue("LikhiEngine", "\"" + Path.Combine(AppDir, EngineExe) + "\"");
                 else
                     try { k.DeleteValue("LikhiEngine", false); } catch { }
             }
@@ -312,26 +312,36 @@ namespace Likhi
             return false;
         }
 
+        // The engine, relative to the install directory. It finds its own models beside it, so the
+        // two move together or not at all.
+        public const string EngineExe = @"engine\likhi-server.exe";
+
         public static void RestartEngine()
         {
             try
             {
-                foreach (Process p in Process.GetProcessesByName("pythonw"))
+                // "likhi-server", not "pythonw": the engine is its own binary since 0.3. A machine
+                // upgraded from an older version may still have the Python one running, and that
+                // one holds the port, so both names are stopped.
+                foreach (string name in new string[] { "likhi-server", "pythonw" })
                 {
-                    try
+                    foreach (Process p in Process.GetProcessesByName(name))
                     {
-                        if (p.MainModule != null && p.MainModule.FileName != null &&
-                            p.MainModule.FileName.StartsWith(AppDir, StringComparison.OrdinalIgnoreCase))
-                            p.Kill();
+                        try
+                        {
+                            if (p.MainModule != null && p.MainModule.FileName != null &&
+                                p.MainModule.FileName.StartsWith(AppDir, StringComparison.OrdinalIgnoreCase))
+                                p.Kill();
+                        }
+                        catch { }
                     }
-                    catch { }
                 }
             }
             catch { }
             try
             {
                 ProcessStartInfo psi = new ProcessStartInfo(
-                    Path.Combine(AppDir, @"runtime\likhi-server.cmd"));
+                    Path.Combine(AppDir, EngineExe));
                 psi.WindowStyle = ProcessWindowStyle.Hidden;
                 psi.CreateNoWindow = true;
                 psi.UseShellExecute = false;

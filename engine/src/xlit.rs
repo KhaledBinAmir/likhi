@@ -294,7 +294,7 @@ impl Xlit {
         std::mem::swap(x, scratch);
     }
 
-    fn ffn_block(&self, f: &Ffn, x: &mut Vec<f32>, rows: usize) {
+    fn ffn_block(&self, f: &Ffn, x: &mut [f32], rows: usize) {
         let dim = self.dim();
         let hidden = f.w1.cols;
         let mut h = vec![0.0f32; rows * dim];

@@ -14,8 +14,13 @@
 
 pub mod avro;
 pub mod core;
+pub mod http;
 pub mod lexicon;
 pub mod personal;
+#[cfg(windows)]
+pub mod pipe;
+pub mod service;
+pub mod telemetry;
 pub mod romankey;
 pub mod tensor;
 pub mod textnorm;
