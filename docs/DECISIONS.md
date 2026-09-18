@@ -2,6 +2,39 @@
 
 Short records of choices that are not obvious from the code. Newest first.
 
+## 2026-09-18: The lexicon is built in Rust, and marisa leaves the build
+
+- **What changed.** `src/likhi/data/` built `marisa` tries and a conversion step turned them into
+  the `.lkx` tables the engine reads. `engine/src/bin/lexicon.rs` now writes `.lkx` directly, so
+  `marisa_trie` is no longer needed to build anything. The Python engine gained a `.lkx` reader
+  (`src/likhi/lkx.py`) so both implementations can be measured on identical tables.
+- **How faithful it is.** Four of the six tables -- unigrams, keys, bigrams, bigram_totals -- are
+  byte-identical to the Python builder's output. Two differences remain: 83 of 124,267 prefix
+  entries, and 2 of 1,280,779 romanizations. Accuracy on dakshina-dev is *identical to full
+  floating-point precision* on all five metrics across 9,279 words, so neither difference has any
+  effect.
+- **The Python builder was not reproducible.** `build_lexicon.py` iterates a `set` to build its key
+  items, and CPython randomises string hashing per process -- verified directly, three runs give
+  three orders. That is the source of the 83 prefix entries. The Rust builder is deterministic.
+- **Three tie-breaks had to be reproduced, not tidied.** Python resolves ties by insertion order
+  (`Counter.most_common`, and `sorted` being stable). Using lexicographic order instead silently
+  changed the chosen spelling of 117 words, 9,571 prefix entries and 12,850 bigrams. Insertion
+  order is now tracked explicitly wherever a tie is decided.
+- **Romanization scan order is a free choice, and the first claim here was wrong.** An earlier
+  version of this entry said 7 points of top-1 depended on marisa's LOUDS enumeration order. That
+  was a misdiagnosis: the builder had not carried `weights.json` forward, so the engine fell back
+  to untuned defaults (unigram 1.0 against 0.5, key_fine 1.2 against 2.0, oov -3 against -6). The
+  giveaway, missed for an hour: two completely different orderings measured 63.50107394906413 --
+  identical to fourteen figures. Order has no measurable effect. It is now attestation count
+  descending, chosen for being defined rather than an artifact of trie layout, and the builder
+  refuses to start without the weights file rather than warning after the fact.
+- **One visible behaviour change.** For `screensaver`, three candidates tie at exactly
+  -17.591683475492697 and the scan order decides which comes third and which fourth. That is 6 of
+  2,400 golden cases; the goldens were regenerated from the Python engine reading the new tables,
+  not from the Rust output, so Python remains the oracle.
+- **`scripts/build_runtime.py` is gone.** It packaged the embedded CPython runtime that 0.3.0
+  stopped shipping.
+
 ## 2026-09-18: The shipped engine is Rust; the Python stays as the reference
 
 - **Context.** The engine was the last Python in the product: an embedded CPython with NumPy,
@@ -13,13 +46,15 @@ Short records of choices that are not obvious from the code. Newest first.
   summation order in a matrix product cannot be eliminated and does not matter at the scale
   candidates are separated by. `suggest` and `fast_suggest` are the acceptance tests: they are what
   the text service calls.
-- **marisa's iteration order had to be reproduced, not improved.** `core.py` inserts candidates in
-  the order the trie yields them and then sorts stably, so equal scores are broken by that order --
-  and marisa enumerates a LOUDS traversal, not lexicographic: for "screensaver" it returns
-  স্ক্রিনসেভারের before its own prefix স্ক্রিনসেভার. Eleven percent of sampled prefixes differ from
-  key order, and the order also decides which candidates are cheap enough to send to the model, so
-  it is not cosmetic. Each entry in `romans.lkx` carries its position in that enumeration. Without
-  it, 3 of 2400 `suggest` cases differed.
+- **marisa's iteration order had to be reproduced to keep the port exact.** `core.py` inserts
+  candidates in the order the trie yields them and then sorts stably, so equal scores are broken by
+  that order -- and marisa enumerates a LOUDS traversal, not lexicographic: for "screensaver" it
+  returns স্ক্রিনসেভারের before its own prefix স্ক্রিনসেভার. Eleven percent of sampled prefixes
+  differ from key order. Each entry in `romans.lkx` therefore carries its position in that
+  enumeration; without it, 3 of 2400 `suggest` cases differed.
+  *(Later correction, 2026-09-18: the order turned out to be free. Replacing it entirely leaves
+  accuracy identical to full precision on dakshina-dev, so reproducing it mattered for making the
+  port provably exact, not for quality. See the 2026-09-18 entry above.)*
 - **Footprint is a trade, not a win on every axis.** marisa is a compressed trie and `.npz` is a
   zip; the replacements are laid out to be memory-mapped rather than unpacked, so they are larger
   at rest and smaller after compression. Measured: installer 57.8 -> 39.2 MB, installed 110 -> 136
