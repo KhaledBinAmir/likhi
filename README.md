@@ -60,7 +60,6 @@ installer/          Inno Setup script and the keyboard setup scripts
 
 src/likhi/          the reference implementation, in Python
 src/likhi/eval/     evaluation harness, metrics, baselines, personal test set tools
-src/likhi/data/     data pipeline: lexicon, frequencies, language model, model conversion
 
 scripts/            dataset download, model conversion, golden generation, builds
 tests/goldens/      recorded Python behaviour that the Rust must reproduce
@@ -83,7 +82,6 @@ research side needs Python 3.12 and [uv](https://docs.astral.sh/uv/).
 uv sync --all-extras
 uv run python scripts/fetch_datasets.py --all                      # datasets + IndicXlit checkpoint
 uv run python scripts/convert_indicxlit.py --src data/raw/indicxlit --npz models/indicxlit-np
-uv run likhi-data lexicon                                           # unigrams, romanizations, phonetic keys
 uv run likhi-eval words --system likhi --dataset dakshina-test      # measure
 uv run pytest                                                       # the Python engine's own tests
 ```
@@ -98,10 +96,14 @@ cd ..
 uv run python scripts/build_rust_data.py --skip-tries   # model weights and the Avro rules
 ```
 
-The lexicon builder is Rust and writes the `.lkx` tables directly. `build_rust_data.py` still
-converts the transliteration model and the Avro rule tables, because their sources are a NumPy
-`.npz` and a Python module; it can also convert old `.marisa` tries with `--skip-model --skip-avro`,
-which is only useful for comparing the two builders.
+The lexicon builder is Rust and writes the `.lkx` tables directly, which is what removed
+`marisa_trie` from the build. It refuses to run without `weights.json`, the tuned ranker weights
+produced by `likhi-tune`: they are not a build output, and a lexicon missing them costs about seven
+points of top-1 silently.
+
+`build_rust_data.py` still converts the transliteration model and the Avro rule tables, because
+their sources are a NumPy `.npz` and a Python module. It can also convert old `.marisa` tries with
+`--skip-model --skip-avro`, which is now only useful for comparing the two builders.
 
 Building what ships:
 

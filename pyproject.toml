@@ -20,7 +20,12 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-# Neural transliteration channel (IndicXlit in pure NumPy) and compact tries.
+# Neural transliteration channel (IndicXlit in pure NumPy).
+#
+# marisa-trie is still here but is no longer used to *build* anything: the lexicon is built by
+# `engine/src/bin/lexicon.rs` and written as .lkx, which both engines read. It remains so that
+# tests/test_lkx.py can keep holding the .lkx reader against the tries it replaced, and so an
+# existing models/lexicon/*.marisa can still be opened. Nothing produces those files any more.
 engine = ["numpy>=1.26", "marisa-trie>=1.2"]
 # Optional faster runtime for the same model. Not used by default: the Windows wheel crashed on
 # an i9-10900K test machine, and NumPy is fast enough for single-word decoding.
@@ -42,7 +47,6 @@ convert = ["omegaconf>=2.3"]
 
 [project.scripts]
 likhi-eval = "likhi.eval.cli:main"
-likhi-data = "likhi.data.cli:main"
 likhi-collect = "likhi.eval.collect:main"
 likhi-tune = "likhi.eval.tune:main"
 likhi-server = "likhi.server:main"

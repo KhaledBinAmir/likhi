@@ -1,5 +1,5 @@
 ; Likhi installer. Build with:
-;   python scripts/build_runtime.py
+;   python scripts/build_engine.py
 ;   python scripts/build_client.py
 ;   python scripts/build_app.py
 ;   "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer\likhi.iss
