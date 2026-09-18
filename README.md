@@ -28,7 +28,9 @@ experience to the Windows desktop, as open source.
 - Imperceptible latency; everything runs locally on a normal laptop CPU.
 - Quick Bangla/English toggle, English passthrough for words you clearly mean as English.
 - Bangla punctuation (।) and numerals handled sensibly, Western numerals optional.
-- Local-only learning data, no telemetry, exportable personal dictionary.
+- Learning data stays on your machine, and the personal dictionary is exportable.
+- Usage reporting is **on by default** during the pilot and is turned off in one click. It never
+  sends anything you type successfully. See [Privacy](#privacy).
 
 ## How it works (short)
 
@@ -47,6 +49,39 @@ keystroke -> TSF text service (a DLL, loaded into the app) -> engine (one backgr
 The text service and the engine talk over a named pipe, with a local socket as a fallback. The pipe
 is what lets Store applications work: they run in an AppContainer, which cannot open a loopback
 socket at all.
+
+## Privacy
+
+Likhi is an input method, so it sees everything you type. What it does with that is worth being
+exact about.
+
+**Never leaves your machine, ever:** the words you type, the text you produce, and what Likhi learns
+from your choices. The personal model is a SQLite database in `%LOCALAPPDATA%\Likhi` and is yours.
+
+**Usage reporting is on by default in the pilot builds**, including the installer attached to the
+releases here, and sends two things to a collection endpoint:
+
+- *Counters.* How many words were committed, how often the first suggestion was the one taken, which
+  position was chosen, how long suggestions took, and the name of the application. No text at all.
+- *Struggle words.* **Only when the first suggestion was wrong**: the roman string you typed, the
+  word you picked instead, and the word Likhi wrongly put first. A word accepted first time is never
+  recorded, because it teaches us nothing.
+
+Before anything is written, it is filtered: anything containing a digit, `@`, `:`, `/` or `\` is
+dropped, so identifiers, passwords, times, money and URLs never qualify. Anything longer than 32
+characters is dropped, which excludes pasted or concatenated text. A field the application marks
+secure, such as a password box, records nothing whatsoever, not even a counter. No timestamp is
+finer than the hour, and the machine is identified by a random installation id and nothing else.
+
+**To turn it off:** open **Likhi** from the Start menu and clear **"Share anonymous usage data to
+improve suggestions"**. That writes a per-user setting, so it needs no administrator and does not
+decide for anyone else sharing the machine. To see exactly what is held before deciding, the files are plain JSON Lines in
+`%LOCALAPPDATA%\Likhi` (`metrics.jsonl` and `events.jsonl`) and can be read in Notepad; deleting
+them is enough to erase them.
+
+The reason it defaults to on: this is a pilot, and the struggle words are the only honest signal for
+which words the engine gets wrong. They become the test set every later change is measured against.
+That is a real trade against your privacy, which is why it is written out here rather than buried.
 
 ## Repository layout
 
