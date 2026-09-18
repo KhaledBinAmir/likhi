@@ -116,6 +116,155 @@ pub struct Config {
     pub sync_seconds: f64,
 }
 
+/// `%LOCALAPPDATA%`, where telemetry files and the per-user config live.
+pub fn local_app_data() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// The per-user override file, the one the Likhi window writes.
+pub fn user_config_path() -> PathBuf {
+    local_app_data().join("Likhi").join("config.json")
+}
+
+/// Every place the shell's config.json may live, most specific first.
+///
+/// The installed layout puts the engine under `<app>\engine\` and the config beside the text
+/// service, so a path relative to the executable is what an installed engine actually needs; the
+/// launcher also sets LIKHI_CONFIG. Missing that was a silent failure in the Python once:
+/// telemetry simply stayed off on every fresh install.
+fn config_paths() -> Vec<PathBuf> {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf));
+    config_paths_from(
+        std::env::var_os("LIKHI_CONFIG").map(PathBuf::from),
+        exe_dir.as_deref(),
+        user_config_path(),
+    )
+}
+
+/// The candidate list, with its inputs passed in so it can be tested against a layout other than
+/// the one the test binary happens to sit in.
+fn config_paths_from(
+    explicit: Option<PathBuf>,
+    exe_dir: Option<&Path>,
+    user_path: PathBuf,
+) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Some(explicit) = explicit {
+        out.push(explicit);
+    }
+    if let Some(dir) = exe_dir {
+        for up in [0usize, 1] {
+            let mut base = dir.to_path_buf();
+            for _ in 0..up {
+                base.pop();
+            }
+            out.push(base.join("likhi").join("config.json"));
+            out.push(base.join("config.json"));
+        }
+    }
+    out.push(user_path);
+    out
+}
+
+fn read_json(path: &Path) -> Option<serde_json::Value> {
+    let bytes = std::fs::read(path).ok()?;
+    // Strip a UTF-8 byte-order mark: administrators edit this file and Notepad writes one, which
+    // plain UTF-8 parsing rejects. That silently disabled telemetry once already.
+    let text = String::from_utf8_lossy(&bytes);
+    let text = text.strip_prefix('\u{FEFF}').unwrap_or(&text);
+    serde_json::from_str(text).ok()
+}
+
+impl Config {
+    /// Where this machine is configured to report, from the environment or the config files.
+    ///
+    /// Lives in the library rather than in the server binary because `likhi-report sync` has to
+    /// reach exactly the same destination the engine would. Two copies of this logic would mean a
+    /// tester's manual sync could quietly go somewhere else than their automatic one.
+    pub fn discover() -> Config {
+        Config::discover_with(
+            &config_paths(),
+            &user_config_path(),
+            local_app_data().join("Likhi"),
+            &|k| std::env::var(k).ok().filter(|v| !v.is_empty()),
+        )
+    }
+
+    /// The logic of `discover`, with its three inputs passed in.
+    ///
+    /// Split out so it can be tested. The alternative -- setting `LIKHI_CONFIG` and `LOCALAPPDATA`
+    /// around each test -- mutates process-global state that Rust's parallel test threads share, so
+    /// the tests would interfere with each other and pass or fail by timing.
+    fn discover_with(
+        paths: &[PathBuf],
+        user_path: &Path,
+        dir: PathBuf,
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> Config {
+        if let Some(mode) = env("LIKHI_TELEMETRY") {
+            return Config {
+                mode: Mode::parse(&mode),
+                dir,
+                drop: env("LIKHI_TELEMETRY_DROP").map(PathBuf::from),
+                endpoint: env("LIKHI_TELEMETRY_ENDPOINT"),
+                key: env("LIKHI_TELEMETRY_KEY"),
+                sync_seconds: env("LIKHI_TELEMETRY_SYNC_S")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(900.0),
+            };
+        }
+
+        for path in paths {
+            let Some(mut cfg) = read_json(path) else { continue };
+            // A person's own choice overrides the machine default, and only the keys they set. The
+            // installed config carries the endpoint and the shared key, which a per-user file has no
+            // business restating: turning reporting off in the Likhi window must not also erase where
+            // reports would go if it were turned back on. Skipped when this *is* the per-user file.
+            if path.as_path() != user_path {
+                if let Some(user) = read_json(user_path) {
+                    if let (Some(base), Some(over)) = (cfg.as_object_mut(), user.as_object()) {
+                        for (k, v) in over {
+                            base.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+            }
+            let s = |k: &str| {
+                cfg.get(k)
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+                    .filter(|v| !v.is_empty())
+            };
+            return Config {
+                mode: Mode::parse(&s("telemetry").unwrap_or_default()),
+                // Cloned rather than moved: the compiler cannot see that this loop body runs at
+                // most once.
+                dir: dir.clone(),
+                drop: s("telemetry_drop").map(PathBuf::from),
+                endpoint: s("telemetry_endpoint"),
+                key: s("telemetry_key"),
+                sync_seconds: cfg
+                    .get("telemetry_sync_seconds")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(900.0),
+            };
+        }
+        Config {
+            mode: Mode::Off,
+            dir,
+            drop: None,
+            endpoint: None,
+            key: None,
+            sync_seconds: 900.0,
+        }
+    }
+}
+
 struct State {
     /// BTreeMap so counter keys come out in a stable order. The Python uses a Counter, whose order
     /// is insertion order; the collector sums by key and does not care, and a deterministic order
@@ -136,8 +285,14 @@ pub struct Telemetry {
 }
 
 impl Telemetry {
+    /// The anonymous per-install identifier, which is also the directory the collector files this
+    /// machine's chunks under.
+    pub fn install_id(&self) -> &str {
+        &self.install_id
+    }
+
     pub fn new(cfg: Config) -> Telemetry {
-        let install_id = Self::install_id(&cfg.dir);
+        let install_id = Self::read_or_create_install_id(&cfg.dir);
         Telemetry {
             mode: cfg.mode,
             drop: cfg.drop,
@@ -155,7 +310,7 @@ impl Telemetry {
 
     /// A random identifier generated once, so rows from one machine can be grouped without naming
     /// anyone. Sixteen hex characters, matching the Python's `uuid4().hex[:16]`.
-    fn install_id(dir: &Path) -> String {
+    fn read_or_create_install_id(dir: &Path) -> String {
         let path = dir.join("install_id");
         if let Ok(text) = std::fs::read_to_string(&path) {
             let trimmed = text.trim();
@@ -326,7 +481,35 @@ impl Telemetry {
     ///
     /// Background thread only. Never call this from a keystroke path.
     pub fn sync(&self) -> Result<usize, String> {
-        if self.drop.is_none() && self.endpoint.is_none() {
+        self.sync_to(None, None, None).map(|r| r.sent)
+    }
+
+    /// Ship to a destination given here instead of the configured one.
+    ///
+    /// A destination that differs from the configured one is *ad hoc*, and an ad-hoc sync does not
+    /// record progress. `sync_state.json` holds one offset per stream rather than one per
+    /// destination, because the configured destinations are always shipped together -- so advancing
+    /// the offset for a one-off copy would mean those bytes never reach the destination the pilot
+    /// actually reads.
+    ///
+    /// Learned the hard way in the Python this replaces: a run that shipped to a temporary folder
+    /// consumed part of a live install's telemetry, and that machine's words never arrived.
+    pub fn sync_to(
+        &self,
+        drop: Option<&Path>,
+        endpoint: Option<&str>,
+        key: Option<&str>,
+    ) -> Result<SyncResult, String> {
+        // Ad hoc only when it actually points somewhere else. Passing the configured destination
+        // explicitly, which is what a plain `likhi-report sync` does after reading the config, must
+        // behave exactly like passing nothing.
+        let ad_hoc = (drop.is_some() && drop != self.drop.as_deref())
+            || (endpoint.is_some() && endpoint != self.endpoint.as_deref());
+        let drop_target = drop.map(Path::to_path_buf).or_else(|| self.drop.clone());
+        let endpoint_target = endpoint.map(str::to_string).or_else(|| self.endpoint.clone());
+        let key = key.map(str::to_string).or_else(|| self.key.clone());
+
+        if drop_target.is_none() && endpoint_target.is_none() {
             return Err("no drop folder or endpoint configured".into());
         }
         let state_path = self.dir.join("sync_state.json");
@@ -361,14 +544,14 @@ impl Telemetry {
                 let seq = state.get(&format!("{stream}.seq")).copied().unwrap_or(0) + 1;
 
                 let mut failed = None;
-                if let Some(target) = &self.drop {
+                if let Some(target) = &drop_target {
                     if let Err(e) = self.send_folder(target, stream, seq, chunk) {
                         failed = Some(e);
                     }
                 }
                 if failed.is_none() {
-                    if let Some(url) = &self.endpoint {
-                        if let Err(e) = self.send_http(url, stream, seq, chunk) {
+                    if let Some(url) = &endpoint_target {
+                        if let Err(e) = self.send_http(url, key.as_deref(), stream, seq, chunk) {
                             failed = Some(e);
                         }
                     }
@@ -383,11 +566,15 @@ impl Telemetry {
                 sent += chunk.iter().filter(|&&b| b == b'\n').count();
             }
         }
-        if let Ok(text) = serde_json::to_string(&state) {
-            let _ = std::fs::write(&state_path, text);
+        // The whole point of `ad_hoc`: a one-off copy elsewhere leaves the offsets untouched, so the
+        // configured destination still receives every one of these bytes.
+        if !ad_hoc {
+            if let Ok(text) = serde_json::to_string(&state) {
+                let _ = std::fs::write(&state_path, text);
+            }
         }
         if errors.is_empty() {
-            Ok(sent)
+            Ok(SyncResult { sent, ad_hoc })
         } else {
             Err(errors.join("; "))
         }
@@ -403,7 +590,14 @@ impl Telemetry {
         std::fs::rename(&tmp, out_dir.join(&name)).map_err(|e| e.to_string())
     }
 
-    fn send_http(&self, url: &str, stream: &str, seq: u64, chunk: &[u8]) -> Result<(), String> {
+    fn send_http(
+        &self,
+        url: &str,
+        key: Option<&str>,
+        stream: &str,
+        seq: u64,
+        chunk: &[u8],
+    ) -> Result<(), String> {
         let headers = [
             ("Content-Type", "application/x-ndjson".to_string()),
             ("X-Likhi-Install", self.install_id.clone()),
@@ -412,11 +606,19 @@ impl Telemetry {
             ("X-Likhi-Version", "1".to_string()),
         ];
         let mut all: Vec<(&str, String)> = headers.to_vec();
-        if let Some(k) = &self.key {
-            all.push(("X-Likhi-Key", k.clone()));
+        if let Some(k) = key {
+            all.push(("X-Likhi-Key", k.to_string()));
         }
         crate::http::post(url, &all, chunk)
     }
+}
+
+/// What one `sync_to` did.
+pub struct SyncResult {
+    pub sent: usize,
+    /// True when this went somewhere other than the configured destination, and so deliberately
+    /// left the offsets where they were.
+    pub ad_hoc: bool,
 }
 
 /// Python's `round(x, 1)`.
@@ -452,6 +654,438 @@ fn read_at(path: &Path, offset: u64, len: usize) -> std::io::Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A unique empty directory under the system temp directory, removed when it goes out of scope.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> TempDir {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static N: AtomicU32 = AtomicU32::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "likhi-test-{tag}-{}-{}",
+                std::process::id(),
+                N.fetch_add(1, Ordering::Relaxed)
+            ));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("create temp dir");
+            TempDir(path)
+        }
+
+        fn write(&self, rel: &str, text: &str) -> PathBuf {
+            let p = self.0.join(rel);
+            if let Some(parent) = p.parent() {
+                std::fs::create_dir_all(parent).expect("create parent");
+            }
+            std::fs::write(&p, text).expect("write");
+            p
+        }
+
+        fn path(&self, rel: &str) -> PathBuf {
+            self.0.join(rel)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    const MACHINE: &str = r#"{"telemetry": "full",
+        "telemetry_endpoint": "https://ingest.example/v1/ingest",
+        "telemetry_key": "machine-key",
+        "telemetry_sync_seconds": 3600}"#;
+
+    /// No environment variables set, which is the normal case on a user's machine.
+    fn no_env(_: &str) -> Option<String> {
+        None
+    }
+
+    fn discover(paths: &[PathBuf], user: &Path, env: &dyn Fn(&str) -> Option<String>) -> Config {
+        Config::discover_with(paths, user, PathBuf::from("dir"), env)
+    }
+
+    // ------------------------------------------------------------------ where the config is found
+
+    /// The regression this guards is a real one, reported as "telemetry never turns on": the
+    /// installed layout puts the engine one directory below the config, and a search that only
+    /// looked beside the executable found nothing on every fresh install.
+    #[test]
+    fn the_installed_layout_is_searched() {
+        // Installed as <app>\engine\likhi-server.exe, with the config at <app>\.
+        let exe_dir = PathBuf::from(r"C:\Program Files\Likhi\engine");
+        let paths = config_paths_from(None, Some(&exe_dir), PathBuf::from("user.json"));
+        for wanted in [
+            r"C:\Program Files\Likhi\engine\likhi\config.json",
+            r"C:\Program Files\Likhi\engine\config.json",
+            r"C:\Program Files\Likhi\likhi\config.json",
+            r"C:\Program Files\Likhi\config.json",
+        ] {
+            assert!(
+                paths.contains(&PathBuf::from(wanted)),
+                "{wanted} missing from {paths:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_per_user_file_is_searched_last() {
+        let user = PathBuf::from(r"C:\Users\x\AppData\Local\Likhi\config.json");
+        let paths = config_paths_from(None, Some(Path::new(r"C:\app")), user.clone());
+        assert_eq!(paths.last(), Some(&user));
+    }
+
+    #[test]
+    fn an_explicit_path_is_searched_first() {
+        let explicit = PathBuf::from(r"C:\somewhere\config.json");
+        let paths = config_paths_from(
+            Some(explicit.clone()),
+            Some(Path::new(r"C:\app")),
+            PathBuf::from("user.json"),
+        );
+        assert_eq!(paths.first(), Some(&explicit));
+    }
+
+    #[test]
+    fn an_explicit_config_wins() {
+        let t = TempDir::new("explicit");
+        let cfg = t.write(
+            "somewhere/config.json",
+            r#"{"telemetry": "full", "telemetry_endpoint": "https://example.test/v1/ingest"}"#,
+        );
+        let got = discover(&[cfg], Path::new("no-such-user.json"), &no_env);
+        assert_eq!(got.mode, Mode::Full);
+        assert_eq!(got.endpoint.as_deref(), Some("https://example.test/v1/ingest"));
+    }
+
+    #[test]
+    fn no_config_anywhere_means_off() {
+        let t = TempDir::new("missing");
+        let got = discover(&[t.path("nope.json")], &t.path("also-nope.json"), &no_env);
+        assert_eq!(got.mode, Mode::Off);
+        assert_eq!(got.endpoint, None);
+    }
+
+    /// Administrators edit this file and Notepad writes a byte-order mark. Plain UTF-8 parsing
+    /// rejects it, and that silently disabled telemetry once already.
+    #[test]
+    fn a_byte_order_mark_does_not_disable_telemetry() {
+        let t = TempDir::new("bom");
+        let cfg = t.write("config.json", &format!("\u{FEFF}{MACHINE}"));
+        let got = discover(&[cfg], Path::new("no-such-user.json"), &no_env);
+        assert_eq!(got.mode, Mode::Full);
+        assert_eq!(got.endpoint.as_deref(), Some("https://ingest.example/v1/ingest"));
+    }
+
+    // ------------------------------------------------------------- the per-user file overrides it
+
+    #[test]
+    fn the_machine_config_alone() {
+        let t = TempDir::new("machine");
+        let cfg = t.write("machine/config.json", MACHINE);
+        let got = discover(&[cfg], &t.path("local/Likhi/config.json"), &no_env);
+        assert_eq!(got.mode, Mode::Full);
+        assert_eq!(got.endpoint.as_deref(), Some("https://ingest.example/v1/ingest"));
+        assert_eq!(got.sync_seconds, 3600.0);
+    }
+
+    /// Turning reporting off in the Likhi window must not erase where reports would go, or turning
+    /// it back on would need an administrator to re-edit Program Files.
+    #[test]
+    fn a_user_can_turn_reporting_off_without_losing_the_destination() {
+        let t = TempDir::new("off");
+        let cfg = t.write("machine/config.json", MACHINE);
+        let user = t.write("local/Likhi/config.json", r#"{"telemetry": "off"}"#);
+        let got = discover(&[cfg], &user, &no_env);
+        assert_eq!(got.mode, Mode::Off);
+        assert_eq!(got.endpoint.as_deref(), Some("https://ingest.example/v1/ingest"));
+        assert_eq!(got.key.as_deref(), Some("machine-key"));
+    }
+
+    #[test]
+    fn a_user_can_turn_reporting_back_on() {
+        let t = TempDir::new("on");
+        let cfg = t.write("machine/config.json", MACHINE);
+        let user = t.write("local/Likhi/config.json", r#"{"telemetry": "full"}"#);
+        let got = discover(&[cfg], &user, &no_env);
+        assert_eq!(got.mode, Mode::Full);
+        assert_eq!(got.endpoint.as_deref(), Some("https://ingest.example/v1/ingest"));
+    }
+
+    #[test]
+    fn a_corrupt_user_file_does_not_break_the_machine_config() {
+        let t = TempDir::new("corrupt");
+        let cfg = t.write("machine/config.json", MACHINE);
+        let user = t.write("local/Likhi/config.json", "{ this is not json");
+        let got = discover(&[cfg], &user, &no_env);
+        assert_eq!(got.mode, Mode::Full);
+        assert_eq!(got.endpoint.as_deref(), Some("https://ingest.example/v1/ingest"));
+    }
+
+    /// Reading the per-user file while it *is* the file being read would merge it into itself. The
+    /// guard matters because that path is also a legitimate machine config on a per-user install.
+    #[test]
+    fn the_user_file_is_not_merged_into_itself() {
+        let t = TempDir::new("self");
+        let user = t.write("local/Likhi/config.json", MACHINE);
+        let got = discover(std::slice::from_ref(&user), &user, &no_env);
+        assert_eq!(got.mode, Mode::Full);
+        assert_eq!(got.key.as_deref(), Some("machine-key"));
+    }
+
+    // --------------------------------------------------------------------- the environment wins
+
+    #[test]
+    fn the_environment_wins_over_both_files() {
+        let t = TempDir::new("env");
+        let cfg = t.write("machine/config.json", MACHINE);
+        let user = t.write("local/Likhi/config.json", r#"{"telemetry": "off"}"#);
+        let env = |k: &str| match k {
+            "LIKHI_TELEMETRY" => Some("metrics".to_string()),
+            _ => None,
+        };
+        assert_eq!(discover(&[cfg], &user, &env).mode, Mode::Metrics);
+    }
+
+    #[test]
+    fn an_empty_environment_variable_is_not_a_setting() {
+        // `discover` filters empty values before calling this, so an empty LIKHI_TELEMETRY must
+        // fall through to the files rather than parsing as Off.
+        let t = TempDir::new("empty");
+        let cfg = t.write("machine/config.json", MACHINE);
+        let env = |_: &str| None;
+        assert_eq!(discover(&[cfg], Path::new("none.json"), &env).mode, Mode::Full);
+    }
+
+    // ----------------------------------------------------------------- what each mode may record
+    //
+    // These are the privacy guarantees the README makes, so they are tested as behaviour of the
+    // files on disk rather than of any function: what matters is that nothing the user typed can be
+    // found in them.
+
+    fn local(dir: &Path, mode: Mode) -> Telemetry {
+        Telemetry::new(Config {
+            mode,
+            dir: dir.to_path_buf(),
+            drop: None,
+            endpoint: None,
+            key: None,
+            sync_seconds: 900.0,
+        })
+    }
+
+    fn commit(t: &Telemetry, roman: &str, chosen: &str, index: usize, top1: &str) {
+        t.commit(roman, chosen, index, top1, "test.exe", false, false, Some(1.0));
+    }
+
+    fn read(dir: &Path, name: &str) -> Option<String> {
+        std::fs::read_to_string(dir.join(name)).ok()
+    }
+
+    #[test]
+    fn off_mode_writes_nothing() {
+        let t = TempDir::new("off-mode");
+        let tel = local(&t.0, Mode::Off);
+        commit(&tel, "amr", "আমরা", 1, "আমার");
+        tel.flush();
+        assert_eq!(read(&t.0, "events.jsonl"), None);
+        assert_eq!(read(&t.0, "metrics.jsonl"), None);
+    }
+
+    #[test]
+    fn metrics_mode_counts_but_stores_no_text() {
+        let t = TempDir::new("metrics-mode");
+        let tel = local(&t.0, Mode::Metrics);
+        commit(&tel, "amar", "আমার", 0, "");
+        commit(&tel, "amr", "আমরা", 1, "আমার");
+        tel.flush();
+        assert_eq!(read(&t.0, "events.jsonl"), None, "metrics mode records no struggle text");
+        let row = read(&t.0, "metrics.jsonl").expect("a counter row");
+        let v: serde_json::Value = serde_json::from_str(row.trim()).expect("valid json");
+        assert_eq!(v["words"], 2);
+        assert_eq!(v["top1_taken"], 1);
+        assert_eq!(v["pos_1"], 1);
+        // The point of the mode: nothing typed appears anywhere in the row.
+        for secret in ["amar", "amr", "আমার", "আমরা"] {
+            assert!(!row.contains(secret), "{secret:?} leaked into a metrics row: {row}");
+        }
+    }
+
+    #[test]
+    fn full_mode_records_only_struggles() {
+        let t = TempDir::new("full-mode");
+        let tel = local(&t.0, Mode::Full);
+        commit(&tel, "amar", "আমার", 0, ""); // taken first: nothing to learn
+        commit(&tel, "amr", "আমরা", 2, "আমার"); // a struggle: recorded
+        commit(&tel, "pin1234", "পিন", 1, "পিনা"); // has digits: redacted
+        tel.flush();
+        let text = read(&t.0, "events.jsonl").expect("an events file");
+        let rows: Vec<serde_json::Value> = text
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).expect("valid json"))
+            .collect();
+        assert_eq!(rows.len(), 1, "only the struggle is recorded: {text}");
+        assert_eq!(rows[0]["roman"], "amr");
+        assert_eq!(rows[0]["chose"], "আমরা");
+        assert_eq!(rows[0]["we_said"], "আমার");
+        assert!(!text.contains("pin1234"), "a string with digits must never be written");
+    }
+
+    /// A password box. Nothing at all, not even a counter.
+    #[test]
+    fn a_secure_field_records_nothing() {
+        let t = TempDir::new("secure");
+        let tel = local(&t.0, Mode::Full);
+        tel.commit("gopon", "গোপন", 1, "গোপনে", "test.exe", false, true, Some(1.0));
+        tel.flush();
+        assert_eq!(read(&t.0, "events.jsonl"), None);
+        assert_eq!(read(&t.0, "metrics.jsonl"), None);
+    }
+
+    /// A machine can be shut down or killed without a clean exit, and TerminateProcess cannot be
+    /// caught, so counters must not sit in memory waiting for a flush that never comes.
+    #[test]
+    fn counters_are_written_without_a_clean_shutdown() {
+        let t = TempDir::new("nokill");
+        let tel = local(&t.0, Mode::Metrics);
+        for _ in 0..FLUSH_EVERY {
+            commit(&tel, "amar", "আমার", 0, "");
+        }
+        // No flush() here on purpose.
+        let text = read(&t.0, "metrics.jsonl").expect("counters on disk without a flush");
+        let total: u64 = text
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter_map(|v| v["words"].as_u64())
+            .sum();
+        assert_eq!(total, FLUSH_EVERY);
+    }
+
+    /// Telemetry must never cost a keystroke, so an unwritable destination is swallowed.
+    #[test]
+    fn an_unreachable_drop_does_not_break_writing() {
+        let t = TempDir::new("baddrop");
+        let tel = Telemetry::new(Config {
+            mode: Mode::Full,
+            dir: t.path("local"),
+            // A path under a file, which cannot be created as a directory.
+            drop: Some(t.write("a-file", "x").join("nope")),
+            endpoint: None,
+            key: None,
+            sync_seconds: 900.0,
+        });
+        commit(&tel, "amr", "আমরা", 1, "আমার");
+        tel.flush(); // must not panic
+        assert!(read(&t.path("local"), "events.jsonl").is_some(), "the local file is still written");
+    }
+
+    // ------------------------------------------------ shipping elsewhere must not cost the pilot
+    //
+    // sync_state.json holds one offset per stream, not one per destination, because the configured
+    // destinations are always shipped together. That makes a one-off sync elsewhere destructive
+    // unless it refuses to record progress. Found the hard way in the Python: a run that shipped to
+    // a temporary folder consumed part of a live install's telemetry.
+
+    /// Local files written and nothing shipped yet, so the offsets start clean.
+    ///
+    /// The destination is attached *after* the flush on purpose: `flush` ships as soon as one is
+    /// configured, so building with it would leave every assertion below comparing against an
+    /// already-advanced offset instead of a clean slate.
+    fn ready_to_ship(t: &TempDir, drop: Option<PathBuf>) -> Telemetry {
+        let mut tel = Telemetry::new(Config {
+            mode: Mode::Full,
+            dir: t.path("state"),
+            drop: None,
+            endpoint: None,
+            key: None,
+            sync_seconds: 900.0,
+        });
+        commit(&tel, "amr", "আমার", 1, "আমি");
+        tel.flush();
+        tel.drop = drop;
+        tel
+    }
+
+    fn offset(tel: &Telemetry) -> u64 {
+        std::fs::read_to_string(tel.dir.join("sync_state.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v.get("events.jsonl").and_then(serde_json::Value::as_u64))
+            .unwrap_or(0)
+    }
+
+    fn any_jsonl(dir: &Path) -> bool {
+        fn walk(dir: &Path) -> bool {
+            std::fs::read_dir(dir).is_ok_and(|rd| {
+                rd.filter_map(|e| e.ok()).any(|e| {
+                    let p = e.path();
+                    if p.is_dir() {
+                        walk(&p)
+                    } else {
+                        p.extension().is_some_and(|x| x == "jsonl")
+                    }
+                })
+            })
+        }
+        walk(dir)
+    }
+
+    #[test]
+    fn a_configured_sync_records_progress() {
+        let t = TempDir::new("configured");
+        let tel = ready_to_ship(&t, Some(t.path("drop")));
+        let r = tel.sync_to(None, None, None).expect("sync");
+        assert!(!r.ad_hoc);
+        assert!(r.sent > 0);
+        assert!(offset(&tel) > 0);
+        // A second round has nothing left to send.
+        assert_eq!(tel.sync_to(None, None, None).expect("second sync").sent, 0);
+    }
+
+    #[test]
+    fn an_ad_hoc_drop_does_not_consume_the_configured_destination() {
+        let t = TempDir::new("adhoc");
+        let real = t.path("real");
+        let tel = ready_to_ship(&t, Some(real.clone()));
+        let elsewhere = t.path("elsewhere");
+
+        let r = tel.sync_to(Some(&elsewhere), None, None).expect("ad-hoc sync");
+        assert!(r.ad_hoc, "a different destination is ad hoc");
+        assert!(r.sent > 0);
+        assert!(any_jsonl(&elsewhere), "the ad-hoc copy is still written");
+        assert_eq!(offset(&tel), 0, "an ad-hoc sync must not record progress");
+
+        // And the real destination still receives everything.
+        let r = tel.sync_to(None, None, None).expect("configured sync");
+        assert!(r.sent > 0, "the configured destination still gets the lines");
+        assert!(any_jsonl(&real));
+        assert!(offset(&tel) > 0);
+    }
+
+    #[test]
+    fn an_ad_hoc_endpoint_does_not_consume_progress() {
+        let t = TempDir::new("adhoc-ep");
+        let tel = ready_to_ship(&t, Some(t.path("real")));
+        // Unreachable on purpose: the point is that the offset is untouched either way.
+        let _ = tel.sync_to(None, Some("http://127.0.0.1:9/v1/ingest"), None);
+        assert_eq!(offset(&tel), 0);
+        assert!(tel.sync_to(None, None, None).expect("configured sync").sent > 0);
+    }
+
+    /// What `likhi-report sync` does after reading the config: it passes the configured destination
+    /// explicitly, and that must behave exactly like passing nothing.
+    #[test]
+    fn the_same_destination_passed_explicitly_is_not_ad_hoc() {
+        let t = TempDir::new("same");
+        let real = t.path("real");
+        let tel = ready_to_ship(&t, Some(real.clone()));
+        let r = tel.sync_to(Some(&real), None, None).expect("sync");
+        assert!(!r.ad_hoc, "the configured destination is never ad hoc");
+        assert!(offset(&tel) > 0);
+    }
 
     #[test]
     fn redaction_rejects_what_the_python_rejects() {

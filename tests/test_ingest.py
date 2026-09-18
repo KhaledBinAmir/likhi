@@ -1,4 +1,10 @@
-"""Integration tests for the HTTPS telemetry path against a real ingest server."""
+"""The ingest server: what it accepts, what it refuses, and what it exports.
+
+This covers the server alone, which is the half that stays in Python -- it runs in a container, not
+on anyone's machine. The client half is the engine, and its side of the same conversation is tested
+from Rust in `engine/tests/ingest.rs`: what it writes, what it ships, and what it must not ship
+twice. The two together cover the path end to end.
+"""
 
 import json
 import subprocess
@@ -9,8 +15,6 @@ import urllib.request
 from pathlib import Path
 
 import pytest
-
-from likhi.telemetry import Telemetry
 
 REPO = Path(__file__).resolve().parents[1]
 SERVER = REPO / "server" / "ingest_server.py"
@@ -80,41 +84,14 @@ def _post(url, body=b'{"a":1}\n', **headers):
     return urllib.request.urlopen(req, timeout=5)
 
 
-def test_client_ships_and_server_stores_same_layout(ingest):
+def test_a_posted_chunk_is_stored_under_its_install(ingest):
+    """The layout the collector depends on: <data>/<install>/<stream>-<seq>.jsonl."""
     url, data = ingest
-    local = data.parent / "client"
-    t = Telemetry("full", directory=local, endpoint=url + "/v1/ingest", key=KEY)
-    t.commit("amr", "আমরা", index=2, top1="আমার")
-    t.commit("tmi", "তুমি", index=1, top1="তোমার")
-    t.flush()
-    stored = sorted((data / t.install_id).glob("events-*.jsonl"))
+    _post(url, body=b'{"roman":"amr","chose":"\\u0986\\u09ae\\u09b0\\u09be"}\n')
+    stored = sorted((data / "abc123def456").glob("events-*.jsonl"))
     assert len(stored) == 1
     rows = [json.loads(x) for x in stored[0].read_text(encoding="utf-8").splitlines()]
-    assert [r["roman"] for r in rows] == ["amr", "tmi"]
-
-
-def test_nothing_is_resent_and_new_lines_go_in_a_new_chunk(ingest):
-    url, data = ingest
-    local = data.parent / "client"
-    t = Telemetry("full", directory=local, endpoint=url + "/v1/ingest", key=KEY)
-    t.commit("amr", "আমরা", index=2, top1="আমার")
-    t.flush()
-    t.sync()  # nothing new
-    assert len(sorted((data / t.install_id).glob("events-*.jsonl"))) == 1
-    t.commit("ki", "কী", index=1, top1="কি")
-    t.flush()
-    chunks = sorted((data / t.install_id).glob("events-*.jsonl"))
-    assert len(chunks) == 2
-    assert len(chunks[1].read_text(encoding="utf-8").strip().splitlines()) == 1
-
-
-def test_offsets_do_not_advance_when_the_endpoint_is_down(tmp_path):
-    local = tmp_path / "client"
-    t = Telemetry("full", directory=local, endpoint="http://127.0.0.1:9/v1/ingest")
-    t.commit("amr", "আমরা", index=2, top1="আমার")
-    t.flush()
-    state = json.loads((local / "sync_state.json").read_text(encoding="utf-8"))
-    assert state.get("events.jsonl", 0) == 0  # unsent, so it will be retried
+    assert [r["roman"] for r in rows] == ["amr"]
 
 
 def test_bad_key_is_rejected(ingest):

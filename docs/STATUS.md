@@ -1,6 +1,31 @@
 # Status
 
-Updated 2026-09-16. Stage numbers refer to docs/PLAN.md section 4.
+Updated 2026-09-18. Stage numbers refer to docs/PLAN.md section 4.
+
+## 2026-09-18: one implementation
+
+Everything that runs on a user's machine is Rust. The engine, the text service, the lexicon
+builder, the evaluation harness, the tuner, the stress tool and the telemetry operator tool all
+live under `engine/` and `shell/`. The Python engine and harness are gone; what remains in Python
+is the ingest service, which runs in a container, and the scripts that prepare data and drive
+builds on a developer machine.
+
+Each tool was ported and cross-checked against the one it replaced before anything was deleted, and
+every comparison matched exactly. `engine/tests/goldens.rs` still replays 96,537 recorded results
+from the original implementation. Those files can no longer be regenerated, which is deliberate:
+see the decision log.
+
+Tests: 93 Rust (74 engine, 5 operator tool, 11 golden groups, 3 ingest end-to-end), 20 Python.
+Clippy clean.
+
+Measured against the Python it replaced: startup 630 to 31 ms, fast path 0.8 to 0.47 ms, full path
+77 to 70 ms, installer 57.8 to 39.2 MB, resident memory 121.7 to 61.6 MB, and private
+(unreclaimable) memory 236.1 to 5.8 MB. Disk went the other way, 110 to 136 MB, which is the
+accepted price of mapping the tables instead of unpacking them.
+
+Open engine-quality issues, unchanged by the port and not caused by it: `rapid` gives রাপিড,
+`bajay` gives বাজে, `maam` gives মম. The stress tool found the larger one: a single adjacent-key
+typo drops top-1 from 72.62% to 9.89%.
 
 ## Stage 0 (foundations, fail-fast) — done except the two items that need Khaled
 

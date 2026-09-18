@@ -1,57 +1,47 @@
+# Python is no longer the product. The engine, the shell and every developer tool are Rust, under
+# `engine/` and `shell/`; this file now describes only what is left:
+#
+#   scripts/   data preparation and build orchestration, run on a developer machine
+#   server/    the ingest service, which runs in a container
+#   tests/     what is left to test in Python: the ingest server, the PIME key map, file encodings
+#
+# There is no importable `likhi` package any more and nothing here is published to PyPI, so this is
+# a configuration file for the tools rather than a package definition.
+
 [project]
-name = "likhi"
+name = "likhi-tools"
 version = "0.0.1"
-description = "Likhi: a Gboard-style, learning Bangla phonetic input method for Windows. Type loose romanized Bangla, get the right word first."
+description = "Developer tooling for Likhi: data preparation, build orchestration and the telemetry ingest service. The engine and shell are Rust, under engine/ and shell/."
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "Khaled Bin Amir" }]
 requires-python = ">=3.12"
-keywords = ["bangla", "bengali", "banglish", "transliteration", "ime", "input-method", "keyboard", "windows", "tsf"]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "License :: OSI Approved :: MIT License",
-  "Natural Language :: Bengali",
-  "Operating System :: Microsoft :: Windows",
-  "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.12",
-  "Topic :: Text Processing :: Linguistic",
+  "Private :: Do Not Upload",
 ]
-# The core engine is pure Python. Optional extras pull in heavier pieces.
 dependencies = []
 
 [project.optional-dependencies]
-# Neural transliteration channel (IndicXlit in pure NumPy).
-#
-# marisa-trie is still here but is no longer used to *build* anything: the lexicon is built by
-# `engine/src/bin/lexicon.rs` and written as .lkx, which both engines read. It remains so that
-# tests/test_lkx.py can keep holding the .lkx reader against the tries it replaced, and so an
-# existing models/lexicon/*.marisa can still be opened. Nothing produces those files any more.
-engine = ["numpy>=1.26", "marisa-trie>=1.2"]
-# Optional faster runtime for the same model. Not used by default: the Windows wheel crashed on
-# an i9-10900K test machine, and NumPy is fast enough for single-word decoding.
-ct2 = ["ctranslate2>=4.5"]
-# Evaluation harness, baselines and data pipeline.
-eval = [
+# Preparing the model and the lexicon source data. NumPy does the weight conversion, whose output
+# is written into the blob the engine maps, so the arithmetic happens here once rather than at
+# every startup.
+data = [
+  "numpy>=1.26",
   "regex>=2024.0",
-  "rich>=13.0",
   "huggingface_hub>=0.24",
   "avro.py>=2024.0",
-  "prompt_toolkit>=3.0",
 ]
+# The deployed ingest service. Running it locally with --data needs nothing at all; this is only
+# for the Cloud Run deployment.
+server = ["google-cloud-storage>=2.18"]
 
 [dependency-groups]
-dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.10"]
+dev = ["pytest>=8.0", "ruff>=0.6"]
 # One-time model conversion (IndicXlit fairseq checkpoint -> CTranslate2). Never shipped to users.
 # torch is deliberately not required: scripts/fairseq_ckpt.py reads the checkpoint with numpy.
 convert = ["omegaconf>=2.3"]
-
-[project.scripts]
-likhi-eval = "likhi.eval.cli:main"
-likhi-collect = "likhi.eval.collect:main"
-likhi-tune = "likhi.eval.tune:main"
-likhi-server = "likhi.server:main"
-likhi-stress = "likhi.eval.stress:main"
-likhi-report = "likhi.report:main"
 
 [project.urls]
 Homepage = "https://github.com/KhaledBinAmir/likhi"
@@ -61,13 +51,14 @@ Issues = "https://github.com/KhaledBinAmir/likhi/issues"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# Nothing is packaged: there is no library here, only scripts run from a checkout.
 [tool.hatch.build.targets.wheel]
-packages = ["src/likhi"]
+bypass-selection = true
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["src", "tests", "scripts"]
+src = ["tests", "scripts", "server"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "W"]

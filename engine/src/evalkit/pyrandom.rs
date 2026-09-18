@@ -119,8 +119,13 @@ impl PyRandom {
     }
 
     /// `getrandbits(k)` for k <= 32, which is all the derived methods here need.
+    ///
+    /// A hard assert, not a `debug_assert`: with k > 32 the shift below underflows, and a release
+    /// build masks the shift amount to five bits instead of trapping. That is exactly how the bug
+    /// this replaced stayed invisible -- every release run gave the right answer by accident, and
+    /// only a debug build revealed it.
     fn getrandbits(&mut self, k: u32) -> u32 {
-        debug_assert!(k <= 32);
+        assert!(k <= 32, "getrandbits({k}) is out of range");
         if k == 0 {
             return 0;
         }
@@ -133,7 +138,10 @@ impl PyRandom {
         if n == 0 {
             return 0;
         }
-        let k = usize::BITS - (n as u32).leading_zeros(); // n.bit_length()
+        // `n.bit_length()`. This counts against a 32-bit value, so the width subtracted from must be
+        // 32: using `usize::BITS` here made k exactly 32 too large on a 64-bit target.
+        let n32 = u32::try_from(n).expect("randbelow is limited to n < 2^32 by getrandbits");
+        let k = u32::BITS - n32.leading_zeros();
         loop {
             let r = self.getrandbits(k) as usize;
             if r < n {
@@ -193,6 +201,27 @@ mod tests {
             let got = r.random();
             assert!((got - w).abs() < 1e-15, "draw {i}: {got} against {w}");
         }
+    }
+
+    /// `randbelow` computes a bit length to decide how many bits to draw. That length was being
+    /// taken against a 64-bit width while the value was 32-bit, making it 32 too large for every
+    /// input; the shift that followed then underflowed. A release build masks an over-wide shift to
+    /// five bits, which happens to land back on the intended amount, so every result was right and
+    /// nothing failed until a debug build ran.
+    ///
+    /// The range below covers each bit length from 1 to 32 at its boundaries.
+    #[test]
+    fn randbelow_draws_the_right_number_of_bits() {
+        let mut r = PyRandom::new(1);
+        for bits in 1..=31u32 {
+            for n in [1usize << (bits - 1), (1usize << bits) - 1] {
+                let v = r.randbelow(n);
+                assert!(v < n, "randbelow({n}) returned {v}");
+            }
+        }
+        // The largest value getrandbits supports, and one past it.
+        assert!(r.randbelow(u32::MAX as usize) < u32::MAX as usize);
+        assert_eq!(r.randbelow(0), 0);
     }
 
     #[test]

@@ -18,7 +18,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -56,114 +56,6 @@ fn data_dir() -> PathBuf {
         .parent()
         .map(|p| p.join("models").join("rust"))
         .unwrap_or_else(|| PathBuf::from("models/rust"))
-}
-
-fn local_app_data() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("."))
-}
-
-fn user_config_path() -> PathBuf {
-    local_app_data().join("Likhi").join("config.json")
-}
-
-/// Every place the shell's config.json may live, most specific first.
-///
-/// The installed layout puts the engine under `<app>\engine\` and the config beside the text
-/// service, so a path relative to the executable is what an installed engine actually needs; the
-/// launcher also sets LIKHI_CONFIG. Missing that was a silent failure in the Python once:
-/// telemetry simply stayed off on every fresh install.
-fn config_paths() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    if let Some(explicit) = std::env::var_os("LIKHI_CONFIG") {
-        out.push(PathBuf::from(explicit));
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        let mut p = exe.clone();
-        p.pop();
-        for up in [0usize, 1] {
-            let mut base = p.clone();
-            for _ in 0..up {
-                base.pop();
-            }
-            out.push(base.join("likhi").join("config.json"));
-            out.push(base.join("config.json"));
-        }
-    }
-    out.push(user_config_path());
-    out
-}
-
-fn read_json(path: &Path) -> Option<serde_json::Value> {
-    let bytes = std::fs::read(path).ok()?;
-    // Strip a UTF-8 byte-order mark: administrators edit this file and Notepad writes one, which
-    // plain UTF-8 parsing rejects. That silently disabled telemetry once already.
-    let text = String::from_utf8_lossy(&bytes);
-    let text = text.strip_prefix('\u{FEFF}').unwrap_or(&text);
-    serde_json::from_str(text).ok()
-}
-
-fn telemetry_config() -> TelemetryConfig {
-    let dir = local_app_data().join("Likhi");
-    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
-
-    if let Some(mode) = env("LIKHI_TELEMETRY") {
-        return TelemetryConfig {
-            mode: Mode::parse(&mode),
-            dir,
-            drop: env("LIKHI_TELEMETRY_DROP").map(PathBuf::from),
-            endpoint: env("LIKHI_TELEMETRY_ENDPOINT"),
-            key: env("LIKHI_TELEMETRY_KEY"),
-            sync_seconds: env("LIKHI_TELEMETRY_SYNC_S")
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(900.0),
-        };
-    }
-
-    let user_path = user_config_path();
-    for path in config_paths() {
-        let Some(mut cfg) = read_json(&path) else { continue };
-        // A person's own choice overrides the machine default, and only the keys they set. The
-        // installed config carries the endpoint and the shared key, which a per-user file has no
-        // business restating: turning reporting off in the Likhi window must not also erase where
-        // reports would go if it were turned back on. Skipped when this *is* the per-user file.
-        if path != user_path {
-            if let Some(user) = read_json(&user_path) {
-                if let (Some(base), Some(over)) = (cfg.as_object_mut(), user.as_object()) {
-                    for (k, v) in over {
-                        base.insert(k.clone(), v.clone());
-                    }
-                }
-            }
-        }
-        let s = |k: &str| {
-            cfg.get(k)
-                .and_then(|v| v.as_str())
-                .map(str::to_string)
-                .filter(|v| !v.is_empty())
-        };
-        return TelemetryConfig {
-            mode: Mode::parse(&s("telemetry").unwrap_or_default()),
-            dir,
-            drop: s("telemetry_drop").map(PathBuf::from),
-            endpoint: s("telemetry_endpoint"),
-            key: s("telemetry_key"),
-            sync_seconds: cfg
-                .get("telemetry_sync_seconds")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(900.0),
-        };
-    }
-    TelemetryConfig {
-        mode: Mode::Off,
-        dir,
-        drop: None,
-        endpoint: None,
-        key: None,
-        sync_seconds: 900.0,
-    }
 }
 
 /// True when a Likhi engine is already answering on this port.
@@ -255,7 +147,7 @@ fn main() {
     let _ = engine.suggest("ami", &[], 5, false);
     log(&format!("engine ready in {:.0} ms", started.elapsed().as_secs_f64() * 1000.0));
 
-    let cfg = telemetry_config();
+    let cfg = TelemetryConfig::discover();
     let mode = cfg.mode;
     let sync_seconds = cfg.sync_seconds;
     let where_to = {

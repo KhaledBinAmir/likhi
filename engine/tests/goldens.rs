@@ -1,13 +1,15 @@
 //! Replay the Python engine's recorded behaviour against this crate.
 //!
-//! These are the tests that decide whether the port is finished. Reviewing a rewrite of a ranking
+//! These are the tests that decided whether the port was finished. Reviewing a rewrite of a ranking
 //! engine cannot establish that it suggests the same words -- only running both on the same inputs
-//! can. `scripts/dump_goldens.py` records what Python returns; every test here asserts this crate
-//! returns the same thing.
+//! can. The vectors in `tests/goldens/` are what the Python returned; every test here asserts this
+//! crate returns the same thing.
 //!
-//! Regenerate after any intentional behaviour change:
-//!
-//!     .venv\Scripts\python.exe scripts\dump_goldens.py
+//! They cannot be regenerated: the Python that produced them, and the script that dumped it, were
+//! deleted once every tool had been ported and cross-checked. That is on purpose. These files are
+//! now a fixed record of behaviour that was once confirmed by a second, independent implementation,
+//! and a change that moves any of them has to be argued for rather than re-recorded away. If a
+//! change is genuinely intended, edit the expectation in the same commit and say why.
 //!
 //! A missing golden file skips its test rather than failing, so a fresh checkout without the
 //! generated data still builds. A skip prints loudly; do not let it become the normal state.
