@@ -1,4 +1,4 @@
-//! Replay the Python engine's recorded behaviour against this crate.
+﻿//! Replay the Python engine's recorded behaviour against this crate.
 //!
 //! These are the tests that decide whether the port is finished. Reviewing a rewrite of a ranking
 //! engine cannot establish that it suggests the same words -- only running both on the same inputs
@@ -466,7 +466,7 @@ fn strings(v: &Value, key: &str) -> Vec<String> {
 #[test]
 fn suggest_matches_python() {
     let Some(cases) = load("suggest") else { return };
-    let Some(mut e) = open_engine() else { return };
+    let Some(e) = open_engine() else { return };
     let mut m = Mismatches::new("suggest");
     for c in &cases {
         let roman = s(c, "roman");
@@ -491,7 +491,7 @@ fn suggest_matches_python() {
 #[test]
 fn fast_suggest_matches_python() {
     let Some(cases) = load("fast_suggest") else { return };
-    let Some(mut e) = open_engine() else { return };
+    let Some(e) = open_engine() else { return };
     let mut m = Mismatches::new("fast_suggest");
     for c in &cases {
         let roman = s(c, "roman");
@@ -520,7 +520,7 @@ fn fast_suggest_matches_python() {
 #[test]
 fn candidate_features_match_python() {
     let Some(cases) = load("features") else { return };
-    let Some(mut e) = open_engine() else { return };
+    let Some(e) = open_engine() else { return };
     let mut m = Mismatches::new("features");
     for c in &cases {
         let roman = s(c, "roman");
@@ -614,3 +614,4 @@ fn prefix_scan_is_sound() {
         assert_eq!(got, *r, "get() and prefix_iter() disagree on {k:?}");
     }
 }
+

@@ -82,7 +82,7 @@ if ($MakeLikhiDefault) {
 # earlier version is removed, or it would try to run a program that is no longer installed.
 $run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 Remove-ItemProperty -Path $run -Name 'LikhiLauncher' -ErrorAction SilentlyContinue
-$engine = Join-Path $InstallDir 'runtime\likhi-server.cmd'
+$engine = Join-Path $InstallDir 'engine\likhi-server.exe'
 if (Test-Path $engine) {
     Set-ItemProperty -Path $run -Name 'LikhiEngine' -Value """$engine"""
     Write-Host "set Likhi to start when you sign in"

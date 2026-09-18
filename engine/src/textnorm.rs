@@ -158,23 +158,56 @@ pub fn has_bengali(text: &str) -> bool {
 ///
 /// Case is deliberately dropped: unlike Avro, Likhi never relies on capitalisation.
 ///
-/// Python uses `str.casefold()`, which is stronger than lowercasing. The difference only matters
-/// for characters that fold *into* ASCII, and after filtering to `[a-z0-9']` the only realistic one
-/// is eszett: Python turns both ß and ẞ into "ss", which survives the filter, where Rust's
-/// `to_lowercase` leaves ß alone and the filter then drops it. That single case is handled
-/// explicitly below. Everything else that casefold and lowercase disagree on (Greek sigma, Cherokee,
-/// the Turkish dotted I) either stays non-ASCII or agrees, and is filtered out either way.
+/// Python uses `str.casefold()`, which is *full* Unicode case folding and strictly stronger than
+/// lowercasing. The difference only matters for characters that fold into ASCII, because everything
+/// else is discarded by the filter either way -- but for those it matters completely, and Rust's
+/// `to_lowercase` does not perform the multi-character expansions.
+///
+/// This is the complete set, and it is complete because it was enumerated rather than reasoned
+/// about: every one of the 1,114,112 codepoints was folded and lowercased in CPython and the two
+/// results compared after filtering. Exactly seventeen differ. A first attempt at this list from
+/// first principles had nine of them and missed the other eight, which is why the table is derived
+/// and not recalled.
+///
+/// Characters that fold to something non-ASCII (Å to å, ς to σ, the Armenian ligatures) are absent
+/// because the filter discards them identically either way, as are the dotted capital I and the
+/// Kelvin sign, where folding and lowercasing agree.
+///
+/// A Bangla typist is unlikely to produce most of these, though the long s does turn up in scanned
+/// text. They are handled anyway: the alternative is a silent, global divergence in the function
+/// every lexicon key is derived from, and "nobody will type that" is not a property this code
+/// should depend on.
+fn casefold_to_ascii(c: char) -> Option<&'static str> {
+    Some(match c {
+        '\u{1E9A}' => "a",           // a with right half ring
+        '\u{1E96}' => "h",           // h with line below
+        '\u{01F0}' => "j",           // j with caron
+        '\u{0149}' => "n",           // 'n
+        '\u{017F}' => "s",           // long s
+        '\u{1E97}' => "t",           // t with diaeresis
+        '\u{1E98}' => "w",           // w with ring above
+        '\u{1E99}' => "y",           // y with ring above
+        '\u{00DF}' | '\u{1E9E}' => "ss", // eszett, lower and upper
+        '\u{FB00}' => "ff",
+        '\u{FB01}' => "fi",
+        '\u{FB02}' => "fl",
+        '\u{FB03}' => "ffi",
+        '\u{FB04}' => "ffl",
+        '\u{FB05}' | '\u{FB06}' => "st", // long-s-t and st ligatures
+        _ => return None,
+    })
+}
+
 pub fn normalize_roman(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
-        match c {
-            'ß' | 'ẞ' => out.push_str("ss"),
-            _ => {
-                for lc in c.to_lowercase() {
-                    if lc.is_ascii_lowercase() || lc.is_ascii_digit() || lc == '\'' {
-                        out.push(lc);
-                    }
-                }
+        if let Some(folded) = casefold_to_ascii(c) {
+            out.push_str(folded);
+            continue;
+        }
+        for lc in c.to_lowercase() {
+            if lc.is_ascii_lowercase() || lc.is_ascii_digit() || lc == '\'' {
+                out.push(lc);
             }
         }
     }
@@ -206,7 +239,57 @@ mod tests {
         let typed = "\u{0995}\u{0981}\u{09BE}"; // ক + candrabindu + aa-sign
         let want = "\u{0995}\u{09BE}\u{0981}"; // ক + aa-sign + candrabindu
         assert_eq!(canonical(typed), want);
-        assert_eq!(canonical(&canonical(typed)), want, "must be idempotent");
+        assert_eq!(canonical(&canonical(typed)), want, "stable once reordered");
+    }
+
+    #[test]
+    fn candrabindu_moves_past_the_whole_run_of_vowel_signs() {
+        // The Python regex is `CANDRABINDU([vowelsigns]+)`, greedy: the sign moves past every vowel
+        // sign that follows, not just the first.
+        let typed = "\u{0995}\u{0981}\u{09BE}\u{09BF}";
+        assert_eq!(canonical(typed), "\u{0995}\u{09BE}\u{09BF}\u{0981}");
+    }
+
+    #[test]
+    fn candrabindu_reordering_happens_once_and_does_not_rescan() {
+        // `re.sub` does not re-scan what it substituted, so one pass is all there is, and canonical
+        // is NOT a fixpoint for this input despite what its docstring claims. Reproducing the
+        // single pass is what matters; converging is not.
+        let typed = "\u{0995}\u{0981}\u{0981}\u{09BE}";
+        assert_eq!(canonical(typed), "\u{0995}\u{0981}\u{09BE}\u{0981}");
+    }
+
+    /// Verified against CPython's `str.casefold` directly, character by character. These are the
+    /// only characters that fold into the set the roman key keeps, and `to_lowercase` handles none
+    /// of them.
+    #[test]
+    fn full_case_folding_expansions_reach_ascii() {
+        assert_eq!(normalize_roman("ß"), "ss");
+        assert_eq!(normalize_roman("ẞ"), "ss");
+        assert_eq!(normalize_roman("straße"), "strasse");
+        assert_eq!(normalize_roman("\u{FB00}"), "ff");
+        assert_eq!(normalize_roman("\u{FB01}le"), "file");
+        assert_eq!(normalize_roman("\u{FB02}"), "fl");
+        assert_eq!(normalize_roman("\u{FB03}"), "ffi");
+        assert_eq!(normalize_roman("\u{FB04}"), "ffl");
+        assert_eq!(normalize_roman("\u{FB05}"), "st");
+        assert_eq!(normalize_roman("\u{FB06}"), "st");
+        // The eight this test originally missed, which is the reason the table is enumerated.
+        assert_eq!(normalize_roman("\u{1E9A}"), "a");
+        assert_eq!(normalize_roman("\u{1E96}"), "h", "h with line below");
+        assert_eq!(normalize_roman("\u{01F0}"), "j");
+        assert_eq!(normalize_roman("\u{0149}"), "n");
+        assert_eq!(normalize_roman("\u{017F}"), "s", "long s");
+        assert_eq!(normalize_roman("\u{1E97}"), "t");
+        assert_eq!(normalize_roman("\u{1E98}"), "w");
+        assert_eq!(normalize_roman("\u{1E99}"), "y");
+        // Agree between folding and lowercasing; listed so a future change cannot break them quietly.
+        assert_eq!(normalize_roman("\u{0130}"), "i", "dotted capital I");
+        assert_eq!(normalize_roman("\u{212A}"), "k", "kelvin sign");
+        // Fold to non-ASCII and are filtered out either way.
+        assert_eq!(normalize_roman("\u{212B}"), "", "angstrom");
+        assert_eq!(normalize_roman("\u{03C2}"), "", "final sigma");
+        assert_eq!(normalize_roman("\u{2019}"), "", "curly apostrophe is not the ASCII one");
     }
 
     #[test]

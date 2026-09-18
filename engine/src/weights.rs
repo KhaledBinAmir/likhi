@@ -2,12 +2,14 @@
 //!
 //! Layout:
 //!
-//!     magic     4    b"LKW1"
-//!     version   4    u32 = 1
-//!     index_len 4    u32
-//!     index     index_len bytes of UTF-8 JSON: {"meta": {...}, "arrays": [{name, shape, offset, count}]}
-//!     (pad to 64)
-//!     data      f32, little-endian; an array's `offset` and `count` are in f32 elements
+//! ```text
+//! magic     4    b"LKW1"
+//! version   4    u32 = 1
+//! index_len 4    u32
+//! index     index_len bytes of UTF-8 JSON: {"meta": {...}, "arrays": [{name, shape, offset, count}]}
+//! (pad to 64)
+//! data      f32, little-endian; an array's `offset` and `count` are in f32 elements
+//! ```
 //!
 //! The file is mapped rather than read. It is 45 MB and the engine is a background process that
 //! spends most of its life idle: mapping means the pages the decoder actually touches are resident
@@ -150,7 +152,7 @@ impl Weights {
         // begins on a 4-byte boundary. Checked rather than assumed: reinterpreting misaligned bytes
         // as f32 is undefined behaviour, not merely slow.
         let base = map.as_ptr() as usize + data_start;
-        if base % std::mem::align_of::<f32>() != 0 {
+        if !base.is_multiple_of(std::mem::align_of::<f32>()) {
             return Err(WeightError::Corrupt("data block is not f32-aligned".into()));
         }
         let data_len = (map.len() - data_start) / 4;

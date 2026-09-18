@@ -120,7 +120,7 @@
 ;        running engine with PowerShell rather than WMIC, which Windows 11 no longer ships.
 ; 0.1.1: the engine did not look for the shell's config.json in the installed layout, so a fresh
 ;        install never reported telemetry.
-#define AppVersion "0.2.5"
+#define AppVersion "0.3.0"
 #define AppPublisher "Khaled Bin Amir"
 #define AppURL "https://github.com/KhaledBinAmir/likhi"
 #define PimeSource "C:\Program Files (x86)\PIME"
@@ -165,8 +165,9 @@ SetupLogging=yes
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-; The engine: embedded Python, NumPy, the Likhi package, the model and the lexicon.
-Source: "..\dist\runtime\*"; DestDir: "{app}\runtime"; Flags: ignoreversion recursesubdirs createallsubdirs
+; The engine: one native binary, the transliteration model, the lexicon tables and the Avro rules.
+; It locates `models` relative to its own executable, so the two stay in the same directory.
+Source: "..\dist\engine\*"; DestDir: "{app}\engine"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; The text service. One DLL per architecture, because it is loaded into whichever process has
 ; keyboard focus and a 32-bit application cannot load the 64-bit one.
 ;
@@ -296,7 +297,27 @@ begin
     upgrade fails on "DeleteFile failed; code 5" and rolls itself back, which is exactly what it did
     on the development machine. }
   RunHidden(ExpandConstant('{sys}\taskkill.exe'), '/f /im Likhi.exe', Code);
+  { The engine has been its own binary since 0.3. Stopped by name for the same reason as the window
+    above: it holds its own executable and its mapped model files open, and an upgrade that cannot
+    replace them rolls itself back. The Python engine is still stopped by path further up, because a
+    machine upgrading from an older version has one running and it holds the port. }
+  RunHidden(ExpandConstant('{sys}\taskkill.exe'), '/f /im likhi-server.exe', Code);
   Sleep(900);
+end;
+
+{ Remove the embedded Python engine an older version installed.
+
+  Left alone it is a hundred megabytes of files nothing will ever run again, and worse, its
+  likhi-server.cmd stays on the autostart path until the Likhi window happens to rewrite it -- so a
+  machine could keep starting the old engine, which would hold port 47123 and the named pipe and
+  quietly shadow the new one. }
+procedure RemoveOldPythonRuntime();
+begin
+  if DirExists(ExpandConstant('{app}\runtime')) then
+  begin
+    Log('removing the Python runtime from an earlier version');
+    DelTree(ExpandConstant('{app}\runtime'), True, True, True);
+  end;
 end;
 
 { Take the old PIME keyboard out of the picker before installing ours.
@@ -403,6 +424,7 @@ begin
   begin
     StopOurProcesses();
     RemoveOldTextService();
+    RemoveOldPythonRuntime();
     { Releases the CLSID from the 0.1.4-and-earlier location before that copy is deleted, so the
       registration never points at a path that no longer exists. Harmless on a first install. }
     if FileExists(ExpandConstant('{app}\pime\x64\PIMETextService.dll')) then

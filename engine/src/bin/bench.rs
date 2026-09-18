@@ -1,4 +1,4 @@
-//! Latency of the engine's two paths, which is the whole reason the port exists.
+﻿//! Latency of the engine's two paths, which is the whole reason the port exists.
 //!
 //!     cargo run --release --bin bench
 //!
@@ -54,7 +54,7 @@ fn main() {
     }
 
     let started = Instant::now();
-    let mut e = Engine::open(&dir, EngineOptions { personal: None, ..Default::default() })
+    let e = Engine::open(&dir, EngineOptions { personal: None, ..Default::default() })
         .expect("engine opens");
     println!("startup: {:.0} ms", started.elapsed().as_secs_f64() * 1000.0);
 
@@ -92,3 +92,4 @@ fn main() {
     report("keystrokes", prefixes);
     println!("\n  (python on this machine: fast 0.8 ms p50, full 77 ms p50)");
 }
+

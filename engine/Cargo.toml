@@ -38,6 +38,11 @@ windows = { version = "0.62", features = [
     "Win32_System_IO",
     "Win32_System_Threading",
     "Win32_System_RemoteDesktop",
+    "Win32_System_SystemInformation",
+    # Telemetry upload. WinHTTP rather than a Rust TLS stack: it is already on every Windows
+    # machine, it uses the system certificate store (so a managed network's proxy and inspection
+    # just work), and it keeps rustls and ring out of a binary that ships to end users.
+    "Win32_Networking_WinHttp",
 ] }
 
 [dev-dependencies]
