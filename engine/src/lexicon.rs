@@ -445,6 +445,115 @@ impl Table {
     }
 }
 
+/// Writing `.lkx` tables.
+///
+/// Only the lexicon builder needs this, so it is behind a feature and not compiled into the engine
+/// that ships. It lives here rather than in the builder so that the format constants, the
+/// front-coding and the reader that has to undo it cannot drift apart.
+#[cfg(feature = "build")]
+pub mod write {
+    use std::io::{BufWriter, Write};
+    use std::path::Path;
+
+    use super::{EXPECT_BLOCK_LEN, MAGIC, VERSION};
+
+    fn uvarint(n: usize, out: &mut Vec<u8>) {
+        let mut n = n;
+        loop {
+            let b = (n & 0x7F) as u8;
+            n >>= 7;
+            if n == 0 {
+                out.push(b);
+                return;
+            }
+            out.push(b | 0x80);
+        }
+    }
+
+    /// Write a table of `(key, record)` pairs, optionally carrying a per-entry rank.
+    ///
+    /// Entries are sorted by UTF-8 bytes, which orders identically to comparing Unicode scalars and
+    /// so matches how Python compares strings -- the ranker breaks score ties by comparing words,
+    /// and a different order here would silently reorder tied candidates.
+    ///
+    /// `ranks[i]` is the position entry `i` should be yielded in by a prefix scan, which is not the
+    /// same as key order. Pass `None` for tables whose results are sorted by score before the
+    /// ranker sees them; they gain nothing from four bytes an entry.
+    pub fn write_table(
+        path: &Path,
+        mut entries: Vec<(String, Vec<u8>)>,
+        record_size: usize,
+        ranks: Option<Vec<u32>>,
+    ) -> std::io::Result<()> {
+        let n = entries.len();
+        if let Some(r) = &ranks {
+            assert_eq!(r.len(), n, "one rank per entry");
+        }
+        // Sort keys and ranks together: a rank belongs to its entry, not to a position.
+        let mut order: Vec<usize> = (0..n).collect();
+        order.sort_by(|&a, &b| entries[a].0.as_bytes().cmp(entries[b].0.as_bytes()));
+        let sorted_ranks = ranks.map(|r| order.iter().map(|&i| r[i]).collect::<Vec<u32>>());
+        let mut taken: Vec<Option<(String, Vec<u8>)>> = entries.drain(..).map(Some).collect();
+        let entries: Vec<(String, Vec<u8>)> =
+            order.iter().map(|&i| taken[i].take().expect("each index once")).collect();
+
+        let block_len = EXPECT_BLOCK_LEN as usize;
+        let mut keys = Vec::with_capacity(n * 8);
+        let mut block_offs: Vec<u32> = Vec::with_capacity(n.div_ceil(block_len));
+        let mut prev: &[u8] = b"";
+        for (i, (key, _)) in entries.iter().enumerate() {
+            let kb = key.as_bytes();
+            if i % block_len == 0 {
+                block_offs.push(keys.len() as u32);
+                uvarint(kb.len(), &mut keys);
+                keys.extend_from_slice(kb);
+            } else {
+                let shared = kb.iter().zip(prev).take_while(|(a, b)| a == b).count();
+                uvarint(shared, &mut keys);
+                uvarint(kb.len() - shared, &mut keys);
+                keys.extend_from_slice(&kb[shared..]);
+            }
+            prev = kb;
+        }
+
+        let flags: u32 = if sorted_ranks.is_some() { super::FLAG_RANKS } else { 0 };
+        let mut head = Vec::with_capacity(64 + block_offs.len() * 4 + keys.len());
+        head.extend_from_slice(MAGIC);
+        for v in [
+            VERSION,
+            n as u32,
+            record_size as u32,
+            EXPECT_BLOCK_LEN,
+            block_offs.len() as u32,
+            flags,
+        ] {
+            head.extend_from_slice(&v.to_le_bytes());
+        }
+        head.extend_from_slice(&(keys.len() as u64).to_le_bytes());
+        for o in &block_offs {
+            head.extend_from_slice(&o.to_le_bytes());
+        }
+        head.extend_from_slice(&keys);
+        head.resize(head.len().next_multiple_of(64), 0);
+
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let mut out = BufWriter::new(std::fs::File::create(path)?);
+        out.write_all(&head)?;
+        for (key, rec) in &entries {
+            assert_eq!(rec.len(), record_size, "record size for {key:?}");
+            out.write_all(rec)?;
+        }
+        if let Some(r) = sorted_ranks {
+            for v in r {
+                out.write_all(&v.to_le_bytes())?;
+            }
+        }
+        out.flush()
+    }
+}
+
 /// Record accessors. The layouts come from the `RecordTrie` format strings in core.py and are
 /// checked against `record_size` when the table is opened, so a mismatched file fails at load
 /// rather than returning silent nonsense.

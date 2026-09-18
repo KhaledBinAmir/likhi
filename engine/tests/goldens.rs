@@ -1,4 +1,4 @@
-﻿//! Replay the Python engine's recorded behaviour against this crate.
+//! Replay the Python engine's recorded behaviour against this crate.
 //!
 //! These are the tests that decide whether the port is finished. Reviewing a rewrite of a ranking
 //! engine cannot establish that it suggests the same words -- only running both on the same inputs
