@@ -57,6 +57,30 @@ foreach ($arch in $targets.Keys) {
     Write-Host ("deployed {0}: {1} KB" -f $arch, [math]::Round((Get-Item $paths[$arch]).Length / 1KB))
 }
 
+# Without this a dev build is invisible to every Store application, and the symptom does not look
+# like a permissions problem at all: the keyboard simply cannot be selected in Telegram or WhatsApp,
+# and Windows drops the window back to ENG. An AppContainer gets no access to %LOCALAPPDATA% by
+# default, so it cannot read the DLL, so TSF cannot load the text service. The installer's own
+# directory under Program Files already carries these two ACEs, which is why an installed build
+# works and a dev build silently does not -- an entire evening was spent chasing that difference.
+#
+# Both package SIDs, matching the engine pipe: AC covers an ordinary Store application, and
+# S-1-15-2-2 (ALL RESTRICTED APPLICATION PACKAGES) covers a Less Privileged AppContainer, which
+# carries no AC SID at all.
+foreach ($arch in $targets.Keys) {
+    $dir = Split-Path -Parent $paths[$arch]
+    foreach ($sid in @('*S-1-15-2-1', '*S-1-15-2-2')) {
+        & icacls $dir /grant "${sid}:(OI)(CI)(RX)" /T /Q | Out-Null
+    }
+}
+# The whole chain has to be traversable, not just the leaf: no access on a parent means no access
+# to anything under it, however the leaf is ACLed.
+foreach ($sid in @('*S-1-15-2-1', '*S-1-15-2-2')) {
+    & icacls $profileDir /grant "${sid}:(RX)" /Q | Out-Null
+    & icacls (Split-Path -Parent $profileDir) /grant "${sid}:(RX)" /Q | Out-Null
+}
+Write-Host "granted app-package read on the deploy folders"
+
 if (-not $NoNotepad) {
     Get-Process Notepad -ErrorAction SilentlyContinue | ForEach-Object {
         Write-Host "closing Notepad pid=$($_.Id)"

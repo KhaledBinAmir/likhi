@@ -1,0 +1,51 @@
+[package]
+name = "likhi-engine"
+version = "0.1.0"
+edition = "2021"
+description = "The Likhi suggestion engine: loose-romanization Bangla candidate generation and ranking"
+license = "MIT"
+publish = false
+
+# A library plus the server binary that wraps it. The split is so the golden tests can drive the
+# engine directly, without a socket in the way.
+[lib]
+name = "likhi_engine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "likhi-server"
+path = "src/bin/server.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The lexicon tables and model weights are mapped, not read: together they are ~120 MB, and an
+# engine that sits in the background all day should not hold that in resident memory. Mapping lets
+# the OS page in only what a lookup touches and evict it again under pressure.
+memmap2 = "0.9"
+rusqlite = { version = "0.32", features = ["bundled"] }
+# NFC. The Bengali rules in textnorm depend on canonical composition behaving exactly as Python's
+# unicodedata does, including decomposing the three nukta letters, which are composition exclusions.
+unicode-normalization = "0.1"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Pipes",
+    "Win32_System_IO",
+    "Win32_System_Threading",
+    "Win32_System_RemoteDesktop",
+] }
+
+[dev-dependencies]
+serde_json = "1"
+
+[profile.release]
+opt-level = 3       # unlike the shell, this crate's whole job is arithmetic
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

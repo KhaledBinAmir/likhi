@@ -44,4 +44,5 @@ Thumbs.db
 
 # Rust build output for the text service
 shell/target/
+engine/target/
 

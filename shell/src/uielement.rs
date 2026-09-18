@@ -6,16 +6,17 @@
 //! the first suggestion committed with no way to reach the others. That is exactly what the pilot
 //! reported.
 //!
-//! Windows' own IME does not draw a window there. It *publishes* the list, through
-//! `ITfUIElementMgr::BeginUIElement`, and the host decides who draws:
+//! So the list is also *published*, through `ITfUIElementMgr::BeginUIElement`, and the host says
+//! who draws it:
 //!
-//! * the host answers "show it yourself" -- an ordinary desktop application, which has no idea how
-//!   to render a candidate list -- and we draw our Direct2D window as before;
-//! * the host answers "I will draw it" -- an immersive one -- and it reads the list back through
-//!   this interface and renders it in its own style, correctly placed and composited.
+//! * "show it yourself" -- and we draw our Direct2D window;
+//! * "I will draw it" -- and the host reads the strings back through this interface and renders
+//!   them in its own style, correctly placed and composited.
 //!
-//! Either way the list appears, which is what "it should show up everywhere, like Windows' own"
-//! means in practice. The same data drives both paths.
+//! Worth recording, because it is not what this module first assumed: Telegram answers *show it
+//! yourself*, despite being immersive, and our window does get created there. So publishing is not
+//! what makes a Store application work -- it is the correct thing to do, and what a screen reader
+//! reads, but the drawing path in a Store app is the same one the desktop uses.
 
 use std::cell::RefCell;
 use std::rc::Rc;
