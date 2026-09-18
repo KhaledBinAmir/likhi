@@ -137,6 +137,28 @@ impl Summary {
     }
 }
 
+/// `(errors, reference length)`, so callers can aggregate a corpus-level word error rate rather
+/// than averaging per-sentence rates -- which would weight a three-word sentence like a thirty-word
+/// one.
+///
+/// Tokens are compared through `match_key`, so a normalization difference is not an error.
+pub fn wer(hyp: &[String], reference: &[String]) -> (usize, usize) {
+    // Distance over tokens, not characters: each token is mapped to a single symbol by interning
+    // its match_key, so `edit_distance` compares words.
+    let mut symbols: std::collections::HashMap<String, char> = std::collections::HashMap::new();
+    let mut intern = |t: &String| -> char {
+        let key = match_key(t);
+        let next = symbols.len();
+        *symbols.entry(key).or_insert_with(|| {
+            // Private-use area, so an interned symbol can never collide with real text.
+            char::from_u32(0xE000 + next as u32).unwrap_or('\u{FFFD}')
+        })
+    };
+    let h: Vec<char> = hyp.iter().map(&mut intern).collect();
+    let r: Vec<char> = reference.iter().map(&mut intern).collect();
+    (edit_distance(&h, &r), r.len())
+}
+
 /// Python's `round()`: half away from zero is what `f64::round` does, but Python rounds half to
 /// even. Only exact ties differ, and `percentile` hits them routinely because its argument is
 /// `p/100 * n + 0.5`.

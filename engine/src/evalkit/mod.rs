@@ -8,3 +8,6 @@
 
 pub mod datasets;
 pub mod metrics;
+pub mod pyrandom;
+pub mod sentences;
+pub mod styles;

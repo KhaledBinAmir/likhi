@@ -34,6 +34,11 @@ name = "likhi-tune"
 path = "src/bin/tune.rs"
 required-features = ["tools"]
 
+[[bin]]
+name = "likhi-stress"
+path = "src/bin/stress.rs"
+required-features = ["tools"]
+
 [features]
 tools = ["dep:flate2", "dep:csv"]
 

@@ -21,7 +21,9 @@ use std::time::Instant;
 
 use likhi_engine::core::{Engine, EngineOptions};
 use likhi_engine::evalkit::datasets::{load_wordset, WordItem};
-use likhi_engine::evalkit::metrics::{percentile, WordEval};
+use likhi_engine::evalkit::metrics::{percentile, rank_of_gold, wer, WordEval};
+use likhi_engine::evalkit::sentences::load_sentences;
+use likhi_engine::textnorm::{has_bengali, normalize_roman};
 
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -190,12 +192,227 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Transliterate a sentence word by word, carrying the last two committed words as context.
+///
+/// Tokens with no Latin letters are passed through untouched: they are URLs, numbers and English
+/// that no transliterator should be rewriting, and counting them as errors would measure the wrong
+/// thing.
+fn transliterate_sentence(engine: &Engine, roman: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut ctx: Vec<String> = Vec::new();
+    for tok in roman.split_whitespace() {
+        let core = strip_edge_punct(tok);
+        if core.is_empty() {
+            continue;
+        }
+        if !core.chars().any(|c| c.is_ascii_alphabetic()) {
+            out.push(core.to_string());
+            continue;
+        }
+        let context: Vec<String> = ctx.iter().rev().take(2).rev().cloned().collect();
+        let cands = engine.suggest(&normalize_roman(core), &context, 1, false);
+        let word = cands.first().cloned().unwrap_or_else(|| core.to_string());
+        out.push(word.clone());
+        ctx.push(word);
+    }
+    out
+}
+
+/// Strip punctuation at the edges only, treating the Bengali block and the joiners as word
+/// characters -- a naive strip would eat a final vowel sign.
+fn strip_edge_punct(tok: &str) -> &str {
+    let is_word = |c: char| {
+        c.is_alphanumeric()
+            || c == '_'
+            || matches!(c, '\u{0980}'..='\u{09FF}' | '\u{200C}' | '\u{200D}')
+    };
+    let start = tok.find(is_word).unwrap_or(tok.len());
+    let end = tok
+        .rfind(is_word)
+        .map(|i| i + tok[i..].chars().next().map_or(1, char::len_utf8));
+    &tok[start..end.unwrap_or(start)]
+}
+
+fn run_sentences(dataset: &str, limit: Option<usize>, threads: usize) -> Result<(), Box<dyn std::error::Error>> {
+    let repo = repo();
+    let engine = Arc::new(Engine::open(
+        &data_dir(&repo),
+        EngineOptions { personal: None, ..Default::default() },
+    )?);
+    let mut sents = load_sentences(&repo, dataset)?;
+    if let Some(n) = limit {
+        sents.truncate(n);
+    }
+    if sents.is_empty() {
+        return Err(format!("{dataset} is empty").into());
+    }
+
+    let started = Instant::now();
+    let sents = Arc::new(sents);
+    let next = Arc::new(AtomicUsize::new(0));
+    let mut handles = Vec::with_capacity(threads);
+    for _ in 0..threads {
+        let engine = Arc::clone(&engine);
+        let sents = Arc::clone(&sents);
+        let next = Arc::clone(&next);
+        handles.push(std::thread::spawn(move || {
+            // (index, errors, ref tokens, bengali-only errors, bengali-only ref tokens)
+            let mut out: Vec<(usize, usize, usize, usize, usize)> = Vec::new();
+            loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                if i >= sents.len() {
+                    return out;
+                }
+                let hyp = transliterate_sentence(&engine, &sents[i].roman);
+                let reference: Vec<String> = sents[i]
+                    .gold
+                    .split_whitespace()
+                    .map(|t| strip_edge_punct(t).to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect();
+                let (e, n) = wer(&hyp, &reference);
+                // Bengali-only view: ignore tokens the gold keeps in Latin.
+                let hyp_bn: Vec<String> =
+                    hyp.iter().filter(|t| has_bengali(t)).cloned().collect();
+                let ref_bn: Vec<String> =
+                    reference.iter().filter(|t| has_bengali(t)).cloned().collect();
+                let (e2, n2) = wer(&hyp_bn, &ref_bn);
+                out.push((i, e, n, e2, n2));
+            }
+        }));
+    }
+    let (mut err, mut refs, mut bn_err, mut bn_refs) = (0usize, 0usize, 0usize, 0usize);
+    for h in handles {
+        for (_, e, n, e2, n2) in h.join().map_err(|_| "a worker thread panicked")? {
+            err += e;
+            refs += n;
+            bn_err += e2;
+            bn_refs += n2;
+        }
+    }
+    println!(
+        "[likhi on {dataset}] n={}  wer={:.2}  wer_bengali_tokens={:.2}  ref_tokens={}  threads={}  {:.1}s",
+        sents.len(),
+        100.0 * err as f64 / refs.max(1) as f64,
+        100.0 * bn_err as f64 / bn_refs.max(1) as f64,
+        refs,
+        threads,
+        started.elapsed().as_secs_f64(),
+    );
+    Ok(())
+}
+
+/// Keystroke replay: type each word letter by letter and record when the gold first appears.
+///
+/// Reports the share of keystrokes a typist could skip by committing as soon as the right word is
+/// top-1, or within top-k. These are the numbers that decide whether the keyboard *feels* fast,
+/// as distinct from whether it is accurate.
+fn run_replay(dataset: &str, k: usize, limit: Option<usize>, threads: usize) -> Result<(), Box<dyn std::error::Error>> {
+    let repo = repo();
+    let engine = Arc::new(Engine::open(
+        &data_dir(&repo),
+        EngineOptions { personal: None, ..Default::default() },
+    )?);
+    let ws = load_wordset(&repo, dataset)?;
+    let items: Vec<WordItem> = match limit {
+        Some(n) => ws.items.into_iter().take(n).collect(),
+        None => ws.items,
+    };
+    if items.is_empty() {
+        return Err(format!("{dataset} is empty").into());
+    }
+
+    let started = Instant::now();
+    let items = Arc::new(items);
+    let next = Arc::new(AtomicUsize::new(0));
+    let mut handles = Vec::with_capacity(threads);
+    for _ in 0..threads {
+        let engine = Arc::clone(&engine);
+        let items = Arc::clone(&items);
+        let next = Arc::clone(&next);
+        handles.push(std::thread::spawn(move || {
+            // (keystrokes, saved_top1, saved_topk, never_top1, never_topk, latencies)
+            let mut acc = (0usize, 0usize, 0usize, 0usize, 0usize, Vec::<f64>::new());
+            loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                if i >= items.len() {
+                    return acc;
+                }
+                let it = &items[i];
+                let chars: Vec<char> = it.roman.chars().collect();
+                let n = chars.len();
+                if n == 0 {
+                    continue;
+                }
+                acc.0 += n;
+                let (mut first1, mut firstk) = (None, None);
+                for prefix_len in 1..=n {
+                    let prefix: String = chars[..prefix_len].iter().collect();
+                    let t = Instant::now();
+                    let cands = engine.suggest(&prefix, &[], k, false);
+                    acc.5.push(t.elapsed().as_secs_f64() * 1000.0);
+                    let rank = rank_of_gold(&cands, &it.golds);
+                    if rank == Some(1) && first1.is_none() {
+                        first1 = Some(prefix_len);
+                    }
+                    if rank.is_some_and(|r| r <= k) && firstk.is_none() {
+                        firstk = Some(prefix_len);
+                    }
+                    if first1.is_some() && firstk.is_some() {
+                        break;
+                    }
+                }
+                match first1 {
+                    Some(at) => acc.1 += n - at,
+                    None => acc.3 += 1,
+                }
+                match firstk {
+                    Some(at) => acc.2 += n - at,
+                    None => acc.4 += 1,
+                }
+            }
+        }));
+    }
+    let (mut keys, mut saved1, mut savedk, mut never1, mut neverk) = (0usize, 0usize, 0usize, 0usize, 0usize);
+    let mut lat: Vec<f64> = Vec::new();
+    for h in handles {
+        let (a, b, c, d, e, mut l) = h.join().map_err(|_| "a worker thread panicked")?;
+        keys += a;
+        saved1 += b;
+        savedk += c;
+        never1 += d;
+        neverk += e;
+        lat.append(&mut l);
+    }
+    println!(
+        "[likhi on {}] n={}  keystrokes={}  saved_top1={:.2}%  saved_top{k}={:.2}%  \
+         never_top1={:.2}%  never_top{k}={:.2}%  p50={:.2}ms p95={:.2}ms  threads={}  {:.1}s",
+        ws.name,
+        items.len(),
+        keys,
+        100.0 * saved1 as f64 / keys.max(1) as f64,
+        100.0 * savedk as f64 / keys.max(1) as f64,
+        100.0 * never1 as f64 / items.len() as f64,
+        100.0 * neverk as f64 / items.len() as f64,
+        percentile(&lat, 50.0),
+        percentile(&lat, 95.0),
+        threads,
+        started.elapsed().as_secs_f64(),
+    );
+    Ok(())
+}
+
 fn main() {
     let argv: Vec<String> = std::env::args().collect();
-    if argv.len() < 2 || argv[1] != "words" {
-        eprintln!("usage: likhi-eval words --dataset <name> [--k 5] [--limit N] [--threads N] [--no-save]");
-        eprintln!("  datasets: dakshina-<split>, aksharantar-<split>, banglatlit-<split>-words,");
-        eprintln!("            feedback-words; any of them with a +grouped suffix");
+    let usage = "usage:\n  \
+        likhi-eval words     --dataset <name> [--k 5] [--limit N] [--threads N] [--no-save]\n  \
+        likhi-eval sentences --dataset <name> [--limit N] [--threads N]\n  \
+        likhi-eval replay    --dataset <name> [--k 5] [--limit N] [--threads N]\n\
+        \n  word sets    : dakshina-<split>, aksharantar-<split>, banglatlit-<split>-words,\n  \
+                         feedback-words; any with a +grouped suffix\n  \
+        sentence sets: dakshina-<split>, banglatlit-<split>";
+    if argv.len() < 2 || !matches!(argv[1].as_str(), "words" | "sentences" | "replay") {
+        eprintln!("{usage}");
         std::process::exit(2);
     }
     let mut args = Args {
@@ -241,7 +458,13 @@ fn main() {
         }
     }
     let _ = std::io::stdout().flush();
-    if let Err(e) = run(&args) {
+    let result = match argv[1].as_str() {
+        "words" => run(&args),
+        "sentences" => run_sentences(&args.dataset, args.limit, args.threads),
+        "replay" => run_replay(&args.dataset, args.k, args.limit, args.threads),
+        _ => unreachable!("checked above"),
+    };
+    if let Err(e) = result {
         eprintln!("[eval] failed: {e}");
         std::process::exit(1);
     }
