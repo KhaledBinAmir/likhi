@@ -16,16 +16,26 @@ path = "src/lib.rs"
 name = "likhi-server"
 path = "src/bin/server.rs"
 
-# The lexicon builder. A developer tool, not part of the product, so its dependencies -- gzip and a
-# CSV reader, needed only to read the source corpora -- are optional and the `build` feature is off
-# by default. Nothing here reaches the engine that ships.
+# Developer tools: the lexicon builder and the evaluation harness. Their dependencies -- gzip and a
+# CSV reader, needed only to read the source corpora -- are optional and the `tools` feature is off
+# by default, so none of this reaches the engine that ships.
 [[bin]]
 name = "likhi-lexicon"
 path = "src/bin/lexicon.rs"
-required-features = ["build"]
+required-features = ["tools"]
+
+[[bin]]
+name = "likhi-eval"
+path = "src/bin/eval.rs"
+required-features = ["tools"]
+
+[[bin]]
+name = "likhi-tune"
+path = "src/bin/tune.rs"
+required-features = ["tools"]
 
 [features]
-build = ["dep:flate2", "dep:csv"]
+tools = ["dep:flate2", "dep:csv"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -39,8 +49,8 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # unicodedata does, including decomposing the three nukta letters, which are composition exclusions.
 unicode-normalization = "0.1"
 
-# Used only by the lexicon builder (feature "build"). flate2's pure-Rust backend on purpose: the
-# builder should not need a C toolchain beyond what the rest of the crate already does.
+# Used only by the developer tools (feature "tools"). flate2's pure-Rust backend on purpose: the
+# tools should not need a C toolchain beyond what the rest of the crate already does.
 flate2 = { version = "1", optional = true, default-features = false, features = ["rust_backend"] }
 csv = { version = "1", optional = true }
 

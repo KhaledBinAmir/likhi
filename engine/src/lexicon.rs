@@ -450,7 +450,7 @@ impl Table {
 /// Only the lexicon builder needs this, so it is behind a feature and not compiled into the engine
 /// that ships. It lives here rather than in the builder so that the format constants, the
 /// front-coding and the reader that has to undo it cannot drift apart.
-#[cfg(feature = "build")]
+#[cfg(feature = "tools")]
 pub mod write {
     use std::io::{BufWriter, Write};
     use std::path::Path;
