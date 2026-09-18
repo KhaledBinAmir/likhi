@@ -1,55 +1,79 @@
 # Third-party components
 
-Likhi's own code is MIT (see LICENSE). The installer redistributes the following unmodified
-components. Each remains under its own licence, and the sources are linked so anyone can rebuild
-or replace them.
+Likhi's own code is MIT (see LICENSE). This lists everything else that ends up on your machine when
+you install it, with its licence and where to get the source, so any part can be rebuilt or
+replaced.
 
-## PIME
+Nothing here is modified. Where a component is statically linked into one of Likhi's binaries, that
+is said explicitly.
 
-The Text Services Framework host that lets a Python program act as a Windows input method.
-Redistributed unmodified.
+## What is no longer included
 
-- Source: https://github.com/EasyIME/PIME
-- Licence: LGPL-2.1 (with Apache-2.0 and PSF-licensed parts), see the repository
-- Version: the `version.txt` beside `PIMELauncher.exe` in the installed folder
+Versions before 0.3.0 shipped an embedded CPython with NumPy and marisa-trie to run the engine, and
+before 0.2.0 they shipped PIME as the Text Services Framework host. None of those are installed any
+more: the text service and the engine are Likhi's own native binaries. An upgrade removes the old
+`runtime` directory.
 
-LGPL-2.1 gives you the right to replace this component. The installer places it in
-`<install dir>\pime`, so a rebuilt `PIMETextService.dll` or `PIMELauncher.exe` can be dropped in
-directly. Re-register with `regsvr32` after replacing the DLL.
+## Statically linked into `engine\likhi-server.exe` and `shell\*\LikhiTextService.dll`
 
-## CPython (embedded distribution)
+Rust crates, compiled into the binaries. Versions are those in `engine/Cargo.lock` and
+`shell/Cargo.lock`; `cargo metadata` in either directory reprints this list for the exact build you
+have.
 
-- Source: https://www.python.org/downloads/windows/
-- Licence: Python Software Foundation License, included as `runtime\python\LICENSE.txt`
+| Crate | Licence | Source |
+|---|---|---|
+| windows, windows-core, windows-implement, windows-interface, windows-numerics, windows-result, windows-strings, windows-link, windows-threading, windows-collections, windows-future | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
+| serde, serde_core, serde_derive, serde_json | MIT OR Apache-2.0 | https://github.com/serde-rs |
+| memmap2 | MIT OR Apache-2.0 | https://github.com/RazrFalcon/memmap2-rs |
+| unicode-normalization | MIT OR Apache-2.0 | https://github.com/unicode-rs/unicode-normalization |
+| rusqlite | MIT | https://github.com/rusqlite/rusqlite |
+| libsqlite3-sys | MIT | https://github.com/rusqlite/rusqlite |
+| ahash, bitflags, cfg-if, hashbrown, hashlink, itoa, once_cell, smallvec, proc-macro2, quote, syn | MIT OR Apache-2.0 | https://crates.io |
+| fallible-iterator, fallible-streaming-iterator | MIT or Apache-2.0 | https://github.com/sfackler/rust-fallible-iterator |
+| memchr | Unlicense OR MIT | https://github.com/BurntSushi/memchr |
+| tinyvec | Zlib OR Apache-2.0 OR MIT | https://github.com/Lokathor/tinyvec |
+| unicode-ident | (MIT OR Apache-2.0) AND Unicode-3.0 | https://github.com/dtolnay/unicode-ident |
+| zerocopy | BSD-2-Clause OR Apache-2.0 OR MIT | https://github.com/google/zerocopy |
+| zmij | MIT | https://crates.io/crates/zmij |
 
-## NumPy
+### SQLite
 
-- Source: https://github.com/numpy/numpy
-- Licence: BSD-3-Clause
+`libsqlite3-sys` bundles the SQLite amalgamation, which its authors have placed in the **public
+domain**. It stores the personal dictionary at `%LOCALAPPDATA%\Likhi\personal.sqlite`.
 
-## marisa-trie
+- Source: https://www.sqlite.org
 
-- Source: https://github.com/pytries/marisa-trie
-- Licence: MIT (wrapping libmarisa, BSD-2-Clause / LGPL-2.1)
+## Data shipped in `engine\models`
 
-## avro.py
-
-The rule-based Avro Phonetic parser, used as one candidate source and as a fallback.
-
-- Source: https://github.com/hitblast/avro.py
-- Licence: MIT
-
-## Models and data
-
-Shipped inside `runtime\models`. These are derived artifacts, not the original datasets.
+Derived artifacts, not the original datasets.
 
 | Artifact | Derived from | Licence |
 |---|---|---|
-| `indicxlit-np` | IndicXlit (AI4Bharat) | MIT |
+| `indicxlit` | IndicXlit (AI4Bharat) | MIT |
+| `avro.json` | the rule tables of avro.py | MIT OR Apache-2.0 |
 | `lexicon` unigram counts and phonetic keys | Bengali Wikipedia via Dakshina (Google), OpenSubtitles frequency lists, BanglaTLit | CC BY-SA 4.0, attribution below |
 | `lexicon` romanization index | Dakshina (CC BY-SA 4.0), Aksharantar (CC0 / CC-BY), BanglaTLit (MIT) | CC BY-SA 4.0 as the strongest term |
 
-Attribution for the CC BY-SA parts:
+`avro.json` holds the rule tables of **avro.py**, converted to JSON by
+`scripts/build_rust_data.py`. The rules are data; the parser that reads them is Likhi's own port of
+avro.py's algorithm.
+
+- Source: https://github.com/hitblast/avro.py
+- Licence: MIT OR Apache-2.0
+
+## Fonts
+
+Installed only if not already present, and left in place when Likhi is uninstalled. Each carries
+its own licence file in `<install dir>\fonts`.
+
+| Font | Licence |
+|---|---|
+| Noto Sans Bengali | SIL Open Font License 1.1 |
+| Anek Bangla | SIL Open Font License 1.1 |
+| Hind Siliguri | SIL Open Font License 1.1 |
+| Tiro Bangla | SIL Open Font License 1.1 |
+
+## Attribution for the CC BY-SA parts
 
 - Dakshina dataset, Google Research, https://github.com/google-research-datasets/dakshina
 - Bengali Wikipedia, https://bn.wikipedia.org

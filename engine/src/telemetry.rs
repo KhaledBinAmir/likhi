@@ -419,22 +419,18 @@ impl Telemetry {
     }
 }
 
-/// Python's `round(x, 1)`, which is banker's rounding on ties. Reproduced so the files match.
+/// Python's `round(x, 1)`.
+///
+/// Not `(x * 10.0).round() / 10.0`, which was the first attempt here and is wrong: multiplying by
+/// ten rounds first, so 3.15 -- whose nearest double is *below* 3.15 -- becomes exactly 31.5 and
+/// then rounds up, where Python gives 3.1. Python rounds the true value of the double, half to
+/// even, and Rust's float formatter does exactly the same thing, so formatting and reparsing is
+/// both correct and obviously correct. Checked against CPython on the table in the tests below.
 fn round1(x: f64) -> f64 {
-    let scaled = x * 10.0;
-    let r = scaled.round();
-    // `f64::round` rounds half away from zero; Python rounds half to even.
-    let v = if (scaled - scaled.trunc()).abs() == 0.5 {
-        let down = scaled.trunc();
-        if (down as i64) % 2 == 0 {
-            down
-        } else {
-            down + scaled.signum()
-        }
-    } else {
-        r
-    };
-    v / 10.0
+    if !x.is_finite() {
+        return x;
+    }
+    format!("{x:.1}").parse().unwrap_or(x)
 }
 
 fn read_at(path: &Path, offset: u64, len: usize) -> std::io::Result<Vec<u8>> {
@@ -477,12 +473,29 @@ mod tests {
         assert!(is_recordable("amar", &word));
     }
 
+    /// Every expected value here was produced by running `round(v, 1)` in CPython, not derived.
+    /// The interesting ones are 3.15 and 3.35, which look like symmetric ties and are not: the
+    /// nearest double to 3.15 is below it and the nearest to 3.35 is above it, so they round in
+    /// opposite directions.
     #[test]
     fn rounding_matches_python_round() {
-        assert_eq!(round1(3.14), 3.1);
-        assert_eq!(round1(3.15), 3.1, "half to even, as Python does");
-        assert_eq!(round1(3.25), 3.2, "half to even");
-        assert_eq!(round1(2.0), 2.0);
+        for (input, want) in [
+            (3.14, 3.1),
+            (3.15, 3.1),
+            (3.25, 3.2),
+            (3.35, 3.4),
+            (2.0, 2.0),
+            (0.05, 0.1),
+            (0.15, 0.1),
+            (27.0, 27.0),
+            (1.005, 1.0),
+            (12.349999, 12.3),
+            (99.95, 100.0),
+            (0.0, 0.0),
+            (123.456, 123.5),
+        ] {
+            assert_eq!(round1(input), want, "round({input}, 1)");
+        }
     }
 
     #[test]

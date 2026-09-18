@@ -2,6 +2,39 @@
 
 Short records of choices that are not obvious from the code. Newest first.
 
+## 2026-09-18: The shipped engine is Rust; the Python stays as the reference
+
+- **Context.** The engine was the last Python in the product: an embedded CPython with NumPy,
+  marisa-trie and the Likhi package, about 65 MB, taking 564-630 ms to start.
+- **How correctness was established.** Not by review. `scripts/dump_goldens.py` records what the
+  Python returns for ~96,500 calls and `engine/tests/goldens.rs` requires the Rust to return the
+  same thing. String and integer results match exactly; the transformer's float32 outputs are
+  checked on *ranking* -- same words, same order -- with scores inside 1e-5, because a different
+  summation order in a matrix product cannot be eliminated and does not matter at the scale
+  candidates are separated by. `suggest` and `fast_suggest` are the acceptance tests: they are what
+  the text service calls.
+- **marisa's iteration order had to be reproduced, not improved.** `core.py` inserts candidates in
+  the order the trie yields them and then sorts stably, so equal scores are broken by that order --
+  and marisa enumerates a LOUDS traversal, not lexicographic: for "screensaver" it returns
+  স্ক্রিনসেভারের before its own prefix স্ক্রিনসেভার. Eleven percent of sampled prefixes differ from
+  key order, and the order also decides which candidates are cheap enough to send to the model, so
+  it is not cosmetic. Each entry in `romans.lkx` carries its position in that enumeration. Without
+  it, 3 of 2400 `suggest` cases differed.
+- **Footprint is a trade, not a win on every axis.** marisa is a compressed trie and `.npz` is a
+  zip; the replacements are laid out to be memory-mapped rather than unpacked, so they are larger
+  at rest and smaller after compression. Measured: installer 57.8 -> 39.2 MB, installed 110 -> 136
+  MB, resident memory 121.7 -> 61.6 MB, and private (unreclaimable) memory 236.1 -> 5.8 MB. The
+  last number is the one that matters on the 4-8 GB office machines this runs on: nearly all of the
+  Rust engine's memory is file pages the OS can evict. That is why the model is not stored
+  compressed, which would save 25 MB of disk and make all 45 MB resident.
+- **A shared word table was measured and rejected.** The obvious way to shrink the tables is to
+  store each Bengali word once and reference it by id. Measured: 1,122,197 distinct romans for
+  1,280,777 entries (1.14 words per roman) and 1,240,052 distinct words, so there is very little
+  reuse to exploit -- projected saving about 26 MB for a redesign of the data layer. Not taken.
+- **What stays in Python.** `src/likhi/eval` and `src/likhi/data`: the research harness and the
+  dataset builders, where Python is the right tool and nothing ships. `src/likhi/` remains the
+  reference implementation and is what the goldens are generated from.
+
 ## 2026-09-16: Transliteration model runs in pure NumPy, not CTranslate2
 
 - **Context.** IndicXlit (11M-parameter character transformer, MIT) is the generative channel.

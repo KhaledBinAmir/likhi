@@ -286,9 +286,9 @@ def convert_model(model_dir: Path, out_dir: Path, max_positions: int) -> None:
     out = WeightWriter()
     out.add("enc_embed", f["encoder.embed_tokens.weight"])
     out.add("dec_embed", f["decoder.embed_tokens.weight"])
-    out.add("out_proj", f.get("decoder.output_projection.weight", f["decoder.embed_tokens.weight"]))
-    # Stored transposed: the forward pass computes x @ out_proj.T, and transposing here means the
-    # Rust matmul only ever walks contiguous rows.
+    # Only the transposed form is written. The forward pass computes `x @ out_proj.T`, so storing it
+    # transposed means the matmul only ever walks contiguous rows -- and storing the untransposed
+    # copy as well would be 0.8 MB on every installation for an array nothing reads.
     out.add(
         "out_proj_t",
         np.ascontiguousarray(
