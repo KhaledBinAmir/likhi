@@ -6,7 +6,6 @@
 //! linguistic work -- that stays in the Likhi engine, reached over the same local socket protocol
 //! the PIME shell used, so the engine did not have to change for the shell to.
 
-mod candidates;
 mod config;
 mod display;
 mod edit;
@@ -36,6 +35,45 @@ static MODULE: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 /// host executable, or the class refers to code that can go away underneath it.
 pub fn module_handle() -> HMODULE {
     HMODULE(MODULE.load(Ordering::Relaxed))
+}
+
+/// Whether this process is in an AppContainer, decided once.
+///
+/// It decides where the candidate list is drawn. A window created by a process in an AppContainer
+/// never reaches the desktop -- every call succeeds and nothing is ever composed -- so inside one
+/// the engine has to draw it instead. Measured on Unigram, which shows nothing, against WhatsApp,
+/// which is also a Store application but runs at full trust and works.
+///
+/// Asked of the token rather than guessed from the executable's path, because "packaged" and
+/// "sandboxed" are different things and only the second one matters here.
+pub(crate) fn in_app_container() -> bool {
+    use std::sync::OnceLock;
+    static IN: OnceLock<bool> = OnceLock::new();
+    *IN.get_or_init(|| {
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::Security::{GetTokenInformation, TokenIsAppContainer};
+        use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+        use windows::Win32::Security::TOKEN_QUERY;
+
+        unsafe {
+            let mut token = HANDLE::default();
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+                return false;
+            }
+            let mut is_container: u32 = 0;
+            let mut len = 0u32;
+            let ok = GetTokenInformation(
+                token,
+                TokenIsAppContainer,
+                Some(&mut is_container as *mut u32 as *mut core::ffi::c_void),
+                std::mem::size_of::<u32>() as u32,
+                &mut len,
+            )
+            .is_ok();
+            let _ = windows::Win32::Foundation::CloseHandle(token);
+            ok && is_container != 0
+        }
+    })
 }
 
 pub(crate) fn module_path() -> String {
@@ -74,6 +112,17 @@ pub extern "system" fn DllMain(instance: HINSTANCE, reason: u32, _reserved: *mut
         MODULE.store(instance.0, Ordering::Relaxed);
         // We keep no per-thread state, so skip the attach/detach notifications for every thread.
         let _ = unsafe { DisableThreadLibraryCalls(HMODULE(instance.0)) };
+        // The candidate window lives in a crate shared with the engine, so it has no log of its
+        // own. Point it at ours, here rather than at first use, so a failure while creating the
+        // window is already being recorded when it happens.
+        likhi_ui::set_loggers(
+            |m: &str| crate::log::write(m),
+            |m: &str| {
+                if crate::log::verbose() {
+                    crate::log::write(m);
+                }
+            },
+        );
     }
     BOOL(1)
 }

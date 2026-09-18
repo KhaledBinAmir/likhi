@@ -30,8 +30,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 // Direct2D points are plain vectors from a sibling crate; windows 0.62 has no D2D_POINT_2F alias.
 use windows_numerics::Vector2;
 
-use crate::config::Config;
-use crate::log;
+use crate::{log, vlog, FontSource, Fonts};
 
 const CLASS_NAME: PCWSTR = w!("LikhiCandidateWindow");
 
@@ -171,6 +170,9 @@ struct Inner {
     config_stamp: u128,
     last_checked: Option<std::time::Instant>,
     refiner: Option<Refiner>,
+    /// Where the font settings come from. Injected: the text service and the engine find their
+    /// configuration by different routes, and this window should not have to know which.
+    fonts: FontSource,
 }
 
 pub struct CandidateWindow {
@@ -178,10 +180,10 @@ pub struct CandidateWindow {
 }
 
 impl CandidateWindow {
-    pub fn new() -> Option<Self> {
-        // Our own module, not the host's: a window class registered from a DLL must name the DLL,
-        // or the class outlives the code its window procedure points into.
-        let hinstance: HINSTANCE = crate::module_handle().into();
+    /// `hinstance` must be the module this code is compiled into, not the host application's.
+    /// A window class registered from a DLL has to name that DLL, or the class outlives the code
+    /// its window procedure points into and the next window to use it jumps into freed memory.
+    pub fn new(hinstance: HINSTANCE, fonts: FontSource) -> Option<Self> {
         let class = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             // CS_DROPSHADOW: the shadow Windows gives menus and tooltips, free, and the single
@@ -206,6 +208,7 @@ impl CandidateWindow {
             config_stamp: 0,
             last_checked: None,
             refiner: None,
+            fonts,
         }));
         let hwnd = unsafe {
             CreateWindowExW(
@@ -264,7 +267,7 @@ impl CandidateWindow {
         };
         let Some((w, h)) = size else { return };
         let (x, y) = place(anchor, w, h);
-        crate::vlog!("candidate window shown at {x},{y} size {w}x{h} ({} items)", candidates.len());
+        vlog!("candidate window shown at {x},{y} size {w}x{h} ({} items)", candidates.len());
         unsafe {
             let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
             let _ = InvalidateRect(Some(hwnd), None, false);
@@ -397,7 +400,7 @@ impl Inner {
             }
         }
         self.last_checked = Some(now);
-        let stamp = crate::config::stamp();
+        let (stamp, _) = (self.fonts)();
         if stamp != self.config_stamp {
             self.config_stamp = stamp;
             self.format = None;
@@ -409,7 +412,7 @@ impl Inner {
         if self.format.is_some() {
             return Some(());
         }
-        let config = Config::load();
+        let config: Fonts = (self.fonts)().1;
         unsafe {
             let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).ok()?;
             // A font named in the config wins if it is installed; otherwise the built-in chain.

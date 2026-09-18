@@ -147,12 +147,22 @@ version = "0.1.0"
 dependencies = [
  "csv",
  "flate2",
+ "likhi-ui",
  "memmap2",
  "rusqlite",
  "serde",
  "serde_json",
  "unicode-normalization",
  "windows",
+]
+
+[[package]]
+name = "likhi-ui"
+version = "0.1.0"
+dependencies = [
+ "windows",
+ "windows-core",
+ "windows-numerics",
 ]
 
 [[package]]

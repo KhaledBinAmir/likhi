@@ -22,7 +22,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 
-use crate::candidates::CandidateWindow;
+use likhi_ui::CandidateWindow;
 use crate::config::{Config, BANGLA_DIGITS};
 use crate::display::{DisplayAttributeInfo, EnumDisplayAttributeInfo};
 use crate::edit::EditSession;
@@ -560,10 +560,21 @@ impl TextService_Impl {
         self.hide_window();
     }
 
+    /// Take the candidate list off the screen, wherever it is being drawn.
+    ///
+    /// Every path that ends a word goes through here -- committed, cancelled, focus lost, service
+    /// deactivated -- which is why the remote window is hidden here rather than at each of them. It
+    /// was hidden in only one of them at first, and a list drawn by the engine then stayed on screen
+    /// after typing stopped and floated over whatever application came to the front next.
     fn hide_window(&self) {
         self.end_ui_element();
         if let Some(w) = self.window.borrow().as_ref() {
             w.hide();
+        }
+        if crate::in_app_container() {
+            // Borrowed separately: `end_ui_element` above can re-enter through TSF, and holding a
+            // mutable borrow of the state across that is a panic waiting for an unlucky host.
+            self.state.borrow_mut().engine.ui_hide();
         }
     }
 
@@ -660,11 +671,38 @@ impl TextService_Impl {
             if let Some(w) = self.window.borrow().as_ref() {
                 w.hide();
             }
+            if crate::in_app_container() {
+                self.state.borrow_mut().engine.ui_hide();
+            }
+            return;
+        }
+
+        // In a sandbox the engine draws it. A window created here would never reach the desktop:
+        // every call reports success and nothing is composed, which is exactly how this went
+        // unnoticed until the window was looked for and was not on the desktop at all.
+        if crate::in_app_container() {
+            let anchor = match self.remote_anchor(ctx) {
+                Some(r) => r,
+                None => {
+                    self.state.borrow_mut().engine.ui_hide();
+                    return;
+                }
+            };
+            let mut s = self.state.borrow_mut();
+            s.engine.ui_show(&candidates, cursor, anchor);
             return;
         }
 
         if self.window.borrow().is_none() {
-            let Some(window) = CandidateWindow::new() else {
+            // This DLL's own module, not the host application's: a window class registered from a
+            // DLL must name that DLL, or the class outlives the code its procedure points into.
+            let Some(window) = CandidateWindow::new(
+                crate::module_handle().into(),
+                Box::new(|| {
+                    let c = Config::load();
+                    (crate::config::stamp(), likhi_ui::Fonts { font_name: c.font_name, font_size: c.font_size })
+                }),
+            ) else {
                 log!("candidate window could not be created");
                 return;
             };
@@ -686,25 +724,14 @@ impl TextService_Impl {
                 if !s.chosen {
                     s.cursor = 0;
                 }
-                Some(crate::candidates::Content {
+                Some(likhi_ui::Content {
                     candidates: s.candidates.clone(),
                     cursor: s.cursor,
                 })
             }));
             *self.window.borrow_mut() = Some(window);
         }
-        // Three sources, most precise first. The last one always answers while there is a focused
-        // window, so reaching the `None` arm now means there is nothing on screen to anchor to.
-        let anchor = match self
-            .composition_rect(ctx)
-            .or_else(caret_rect)
-            .or_else(|| {
-                let r = focus_window_rect();
-                if r.is_some() {
-                    vlog!("anchor: falling back to the focused window");
-                }
-                r
-            }) {
+        let anchor = match self.anchor(ctx) {
             Some(r) => r,
             None => {
                 log!("anchor: none available; the candidate list cannot be shown");
@@ -729,6 +756,33 @@ impl TextService_Impl {
             unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) },
             unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) },
         );
+    }
+
+    /// Where to put the candidate list, in screen coordinates.
+    ///
+    /// Three sources, most precise first. The last one answers whenever anything has focus, so a
+    /// `None` here means there is nothing on screen to anchor to at all.
+    fn anchor(&self, ctx: &ITfContext) -> Option<RECT> {
+        self.composition_rect(ctx).or_else(caret_rect).or_else(|| {
+            let r = focus_window_rect();
+            if r.is_some() {
+                vlog!("anchor: falling back to the focused window");
+            }
+            r
+        })
+    }
+
+    /// The same anchor, as plain numbers for the engine to draw against.
+    fn remote_anchor(&self, ctx: &ITfContext) -> Option<(i32, i32, i32, i32)> {
+        let r = self.anchor(ctx)?;
+        vlog!(
+            "remote anchor l={} t={} r={} b={}",
+            r.left,
+            r.top,
+            r.right,
+            r.bottom
+        );
+        Some((r.left, r.top, r.right, r.bottom))
     }
 
     /// Screen rectangle of the composition, via a read-only edit session.
@@ -886,6 +940,10 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
 
     fn Deactivate(&self) -> Result<()> {
         log!("deactivate");
+        // Before anything else, and before the thread manager goes: the keyboard is being taken
+        // away from this application, and a list drawn by the engine outlives this process unless
+        // it is told. Closing an application mid-word must not leave one floating on the desktop.
+        self.hide_window();
         let tim = self.thread_mgr.borrow_mut().take();
         if let Some(tim) = tim {
             unsafe {
