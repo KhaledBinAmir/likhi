@@ -147,6 +147,12 @@ fn main() {
     let _ = engine.suggest("ami", &[], 5, false);
     log(&format!("engine ready in {:.0} ms", started.elapsed().as_secs_f64() * 1000.0));
 
+    // Build the candidate window now rather than when the first sandboxed application asks for it.
+    // Built lazily, the first request paid for creating a thread, a window, and the Direct2D and
+    // DirectWrite factories -- while a text service sat blocked on the reply inside a keystroke.
+    // Off the startup path too, so this does not delay the engine answering.
+    likhi_engine::uihost::prewarm();
+
     let cfg = TelemetryConfig::discover();
     let mode = cfg.mode;
     let sync_seconds = cfg.sync_seconds;
