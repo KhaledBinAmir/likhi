@@ -16,6 +16,16 @@
 //!
 //! Run: `likhi-server [--port 47123]`
 
+// No console. This starts from the Run key at every sign-in, and as a console application Windows
+// gave it a window: a black terminal appearing on the desktop at boot, on every machine, with the
+// installation path as its title. Nobody wants that and nothing about it is dev-only.
+//
+// The console is still attached when there is one to attach to, so running it by hand from a
+// terminal prints exactly as before -- see `attach_parent_console` below. Without that the
+// subsystem change would have made the engine silent for whoever is debugging it, which is a poor
+// trade for hiding a window.
+#![windows_subsystem = "windows"]
+
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -31,7 +41,114 @@ use likhi_engine::telemetry::{Config as TelemetryConfig, Mode, Telemetry};
 fn log(msg: &str) {
     println!("[likhi-server] {msg}");
     let _ = std::io::stdout().flush();
+    log_to_file(msg);
 }
+
+/// Also to a file, because at sign-in there is no console to print to.
+///
+/// Without this the engine became silent on exactly the machines where something goes wrong: it
+/// starts from the Run key with no terminal, so "engine ready in 444 ms" and every later warning
+/// went nowhere. A pilot tester cannot send a log that was never written, and an evening was
+/// already lost to a text service whose log existed but in a folder nobody was reading.
+///
+/// Opened and closed per line, like the text service's log: no handle is held, so a process that
+/// dies loses nothing, and there is no lock on any hot path. Nothing here runs per keystroke.
+fn log_to_file(msg: &str) {
+    /// Past this the file is rotated to `engine.log.1`. A machine that runs for months should not
+    /// fill a disk with startup lines.
+    const MAX_BYTES: u64 = 1024 * 1024;
+
+    let Some(base) = std::env::var_os("LOCALAPPDATA").or_else(|| std::env::var_os("HOME")) else {
+        return;
+    };
+    let dir = PathBuf::from(base).join("Likhi");
+    let path = dir.join("engine.log");
+    let _ = std::fs::create_dir_all(&dir);
+    if std::fs::metadata(&path).map(|m| m.len() > MAX_BYTES).unwrap_or(false) {
+        let _ = std::fs::rename(&path, path.with_extension("log.1"));
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{} [likhi-server] {msg}", local_stamp());
+    }
+}
+
+/// Local wall-clock time to the second, matching the text service's log so the two can be read
+/// side by side. Local rather than UTC because these are read next to someone saying "it broke
+/// just now".
+fn local_stamp() -> String {
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::SystemInformation::GetLocalTime;
+        let t = unsafe { GetLocalTime() };
+        format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+            t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        String::from("--------- --:--:--")
+    }
+}
+
+/// Borrow the console of whatever started us, if there is one.
+///
+/// A windows-subsystem binary gets no console, which is the point: started from the Run key it must
+/// not put a terminal on the desktop. But started by hand from a terminal it should still print, so
+/// it attaches to the parent's console when there is one. Fails harmlessly when there is not, which
+/// is the normal case at sign-in.
+#[cfg(windows)]
+fn attach_parent_console() {
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        OPEN_EXISTING,
+    };
+    use windows::Win32::System::Console::{
+        AttachConsole, GetStdHandle, SetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE,
+        STD_OUTPUT_HANDLE,
+    };
+
+    unsafe {
+        if AttachConsole(ATTACH_PARENT_PROCESS).is_err() {
+            return; // Started with no console, which is the normal case at sign-in.
+        }
+        // Attaching gives the process a console but leaves its standard handles as they were, which
+        // for a windows-subsystem binary is usually nothing at all. Opening CONOUT$ and installing
+        // it is what actually makes `println!` appear.
+        //
+        // Only where there is not a handle already. A run with its output redirected to a file
+        // arrives with perfectly good handles, and replacing those would send the output to the
+        // console instead of the file the caller asked for.
+        let name: Vec<u16> = "CONOUT$\0".encode_utf16().collect();
+        let mut console = None;
+        for slot in [STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            let existing = GetStdHandle(slot);
+            let already_set = existing.map(|h| !h.is_invalid() && !h.0.is_null()).unwrap_or(false);
+            if already_set {
+                continue;
+            }
+            if console.is_none() {
+                console = CreateFileW(
+                    PCWSTR(name.as_ptr()),
+                    (FILE_GENERIC_READ | FILE_GENERIC_WRITE).0,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    None,
+                    OPEN_EXISTING,
+                    Default::default(),
+                    None,
+                )
+                .ok();
+            }
+            if let Some(h) = console {
+                let _ = SetStdHandle(slot, h);
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn attach_parent_console() {}
 
 /// Where the engine's data lives: `models/rust` beside the executable when installed, or in the
 /// repository during development.
@@ -97,6 +214,9 @@ fn serve_socket(stream: TcpStream, svc: Arc<SuggestService>, tel: Arc<Telemetry>
 }
 
 fn main() {
+    // Before anything is printed, so a run from a terminal still shows its output.
+    attach_parent_console();
+
     let mut port = DEFAULT_PORT;
     let args: Vec<String> = std::env::args().collect();
     let mut i = 1;

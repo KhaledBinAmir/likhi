@@ -85,6 +85,10 @@ windows = { version = "0.62", features = [
     # The candidate window drawn for sandboxed applications: its own thread, its own message loop.
     "Win32_System_LibraryLoader",
     "Win32_UI_WindowsAndMessaging",
+    # Borrowing the parent's console when there is one. The server is a windows-subsystem binary so
+    # that starting at sign-in does not put a terminal on the desktop, and this is what keeps it
+    # printing normally when someone runs it by hand.
+    "Win32_System_Console",
 ] }
 # The candidate window itself, shared with the text service so the list looks the same however it
 # is drawn.
