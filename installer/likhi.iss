@@ -8,6 +8,32 @@
 ; rights once and leaves the user with a working Bangla keyboard and nothing to configure.
 
 #define AppName "Likhi"
+; 0.4.1: the engine no longer puts a console window on the desktop at sign-in. It starts from the
+;        Run key, and as a console application Windows gave it a terminal titled with the install
+;        path, on every machine, at every boot. It is a windows-subsystem binary now and borrows the
+;        parent's console when started by hand, so running it from a terminal still prints. With no
+;        console there is nowhere for it to print at sign-in, so it also writes
+;        %LOCALAPPDATA%\Likhi\engine.log -- a tester cannot send a log that was never written.
+; 0.4.0: suggestions appear in sandboxed applications. A window created by a process inside an
+;        AppContainer never reaches the desktop: CreateWindowExW returns a handle, SetWindowPos
+;        reports success, and nothing is composed. So in Telegram Likhi typed Bangla, showed no
+;        list, and committed whatever it had ranked first. Established by enumerating every window
+;        on the machine while typing -- ours was in Code, Notepad and WhatsApp, and never in
+;        Telegram. WhatsApp is also a Store application and works, because it runs at full trust,
+;        so the line is the sandbox rather than the Store and no application can opt out of it.
+;        The engine is an ordinary user process, so it draws the list on the text service's behalf;
+;        only the drawing moved, and applications that already worked still draw their own.
+;        The text service also starts the engine when nothing answers. A Windows update restarted a
+;        machine, the engine did not come back, and the keyboard did nothing everywhere with no
+;        indication why -- which reads as the product being broken and produces no useful report.
+;        Two waits were moved off the thread applications draw on: starting the engine ran
+;        CreateProcess inside a keystroke, where Windows Defender's scan of a newly installed binary
+;        costs 102-155 ms against a 30 ms budget, and the candidate window was built on first use
+;        while a text service sat blocked on the reply.
+; 0.3.0: the engine, the lexicon builder, the evaluation harness and the tuner are Rust. The Python
+;        they replaced is gone, after each tool was checked against the one it replaced and produced
+;        the same numbers. No interpreter ships: installer 57.8 -> 39.2 MB, start-up 630 -> 31 ms,
+;        and unreclaimable memory 236 -> 6 MB, which is what matters on the machines this runs on.
 ; 0.2.4: a full stop after a space typed a period rather than the dari -- punctuation was handled
 ;        only inside a composition, and after Space there is none. The suggestion list often failed
 ;        to appear for the first letter of a word, because GetTextExt on a composition created a
@@ -120,7 +146,7 @@
 ;        running engine with PowerShell rather than WMIC, which Windows 11 no longer ships.
 ; 0.1.1: the engine did not look for the shell's config.json in the installed layout, so a fresh
 ;        install never reported telemetry.
-#define AppVersion "0.4.0"
+#define AppVersion "0.4.1"
 #define AppPublisher "Khaled Bin Amir"
 #define AppURL "https://github.com/KhaledBinAmir/likhi"
 #define PimeSource "C:\Program Files (x86)\PIME"
