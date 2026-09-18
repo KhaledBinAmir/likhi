@@ -31,6 +31,7 @@ use windows::Win32::System::Threading::{
 use windows::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 
 use crate::log;
+use crate::vlog;
 
 /// How long a single suggestion may block. Matches `type_deadline_ms` / `commit_deadline_ms` in
 /// the shell's config.json: the engine answers a typing request with whatever it has by the
@@ -497,6 +498,38 @@ impl Engine {
         if let Err(e) = self.call(&request, read_timeout_for(COMMIT_DEADLINE_MS)) {
             if e.kind() != std::io::ErrorKind::WouldBlock {
                 log!("learn not delivered: {e}");
+            }
+        }
+    }
+
+    /// Ask the engine to draw the candidate list, because this process cannot.
+    ///
+    /// Used only inside a sandboxed application, where a window created here never reaches the
+    /// desktop. `rect` is in screen coordinates and is the same anchor the local window would have
+    /// been placed against, so the list lands in the same place either way.
+    ///
+    /// Short deadline: this is on the keystroke path and a list that arrives late is worse than one
+    /// that does not arrive, because the next keystroke is already replacing it.
+    pub fn ui_show(&mut self, items: &[String], cursor: usize, rect: (i32, i32, i32, i32)) {
+        let request = serde_json::json!({
+            "op": "ui_show",
+            "items": items,
+            "cursor": cursor,
+            "rect": [rect.0, rect.1, rect.2, rect.3],
+        })
+        .to_string();
+        if let Err(e) = self.call(&request, read_timeout_for(TYPE_DEADLINE_MS)) {
+            if e.kind() != std::io::ErrorKind::WouldBlock {
+                vlog!("ui_show not delivered: {e}");
+            }
+        }
+    }
+
+    pub fn ui_hide(&mut self) {
+        let request = r#"{"op":"ui_hide"}"#;
+        if let Err(e) = self.call(request, read_timeout_for(TYPE_DEADLINE_MS)) {
+            if e.kind() != std::io::ErrorKind::WouldBlock {
+                vlog!("ui_hide not delivered: {e}");
             }
         }
     }

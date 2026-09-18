@@ -180,6 +180,45 @@ fn read_json(path: &Path) -> Option<serde_json::Value> {
     serde_json::from_str(text).ok()
 }
 
+/// The shell's config.json, with the per-user file merged over it, as raw JSON.
+///
+/// Exposed because the candidate window the engine draws for sandboxed applications reads its font
+/// settings from the same file the text service does. Two different answers would mean the list
+/// looked one way in Notepad and another in Telegram.
+pub fn shell_config() -> Option<serde_json::Value> {
+    let user_path = user_config_path();
+    for path in config_paths() {
+        let Some(mut cfg) = read_json(&path) else { continue };
+        if path != user_path {
+            if let Some(user) = read_json(&user_path) {
+                if let (Some(base), Some(over)) = (cfg.as_object_mut(), user.as_object()) {
+                    for (k, v) in over {
+                        base.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+        return Some(cfg);
+    }
+    None
+}
+
+/// A value that changes whenever any candidate config file is written.
+///
+/// Nanoseconds rather than seconds, matching the text service: two saves inside the same second --
+/// pick a font, then a size -- would otherwise look like no change at all and the second would not
+/// take effect.
+pub fn config_stamp() -> u128 {
+    config_paths()
+        .iter()
+        .filter_map(|p| std::fs::metadata(p).ok())
+        .filter_map(|m| m.modified().ok())
+        .filter_map(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .max()
+        .unwrap_or(0)
+}
+
 impl Config {
     /// Where this machine is configured to report, from the environment or the config files.
     ///

@@ -29,6 +29,9 @@ pub mod personal;
 pub mod pipe;
 pub mod service;
 pub mod telemetry;
+/// The candidate window drawn on behalf of a sandboxed application, which cannot show one itself.
+#[cfg(windows)]
+pub mod uihost;
 pub mod romankey;
 pub mod tensor;
 pub mod textnorm;

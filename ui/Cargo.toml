@@ -1,0 +1,33 @@
+[package]
+name = "likhi-ui"
+version = "0.1.0"
+edition = "2021"
+description = "The Likhi candidate window: one implementation, drawn either inside the application or by the engine on its behalf"
+license = "MIT"
+publish = false
+
+# Shared because the same window has to be drawn from two places. The text service draws it inside
+# the application it is loaded into, which is the fastest path and the one that works nearly
+# everywhere. That is impossible in a sandboxed application: a window created inside an AppContainer
+# never reaches the desktop, so for those the engine draws it instead, out of process. Two copies of
+# this code would mean the candidate list looked different depending on which application you were
+# typing in, and every drawing fix would have to be made twice.
+
+[dependencies]
+windows = { version = "0.62", features = [
+    "Foundation_Numerics",
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Dwm",
+    "Win32_UI_HiDpi",
+] }
+windows-core = "0.62"
+# Direct2D points and sizes are Vector2 from here; windows 0.62 has no D2D_POINT_2F alias.
+windows-numerics = "0.3"

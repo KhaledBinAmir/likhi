@@ -82,7 +82,13 @@ windows = { version = "0.62", features = [
     # machine, it uses the system certificate store (so a managed network's proxy and inspection
     # just work), and it keeps rustls and ring out of a binary that ships to end users.
     "Win32_Networking_WinHttp",
+    # The candidate window drawn for sandboxed applications: its own thread, its own message loop.
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
 ] }
+# The candidate window itself, shared with the text service so the list looks the same however it
+# is drawn.
+likhi-ui = { path = "../ui" }
 
 [dev-dependencies]
 serde_json = "1"

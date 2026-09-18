@@ -45,6 +45,9 @@ windows = { version = "0.62", features = [
     "Win32_UI_HiDpi",
 ] }
 windows-core = "0.62"
+# The candidate window, shared with the engine. The engine draws the same window out of process for
+# applications where one created in-process never reaches the desktop.
+likhi-ui = { path = "../ui" }
 # Direct2D points and sizes are Vector2 from here; windows 0.62 has no D2D_POINT_2F alias.
 windows-numerics = "0.3"
 # The engine protocol is JSON lines, over a named pipe where possible and a local socket otherwise;

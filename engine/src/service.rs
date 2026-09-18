@@ -321,6 +321,26 @@ pub fn handle_request(svc: &SuggestService, tel: &Telemetry, raw: &[u8]) -> Vec<
             let op = req.get("op").and_then(Value::as_str).unwrap_or("suggest");
             match op {
                 "ping" => json!({"ok": true, "version": VERSION}),
+                // Drawing the candidate list for a text service that cannot draw one itself. Only
+                // the drawing: what the candidates are and which is highlighted was decided by the
+                // caller, which is the only side that knows what is being typed.
+                #[cfg(windows)]
+                "ui_show" => {
+                    let items = string_list(&req, "items");
+                    let cursor = req.get("cursor").and_then(Value::as_u64).unwrap_or(0) as usize;
+                    let r = req.get("rect").and_then(Value::as_array).cloned().unwrap_or_default();
+                    let at = |i: usize| r.get(i).and_then(Value::as_i64).unwrap_or(0) as i32;
+                    let rect = windows::Win32::Foundation::RECT {
+                        left: at(0),
+                        top: at(1),
+                        right: at(2),
+                        bottom: at(3),
+                    };
+                    let shown = crate::uihost::show(items, cursor, rect);
+                    json!({"ok": true, "shown": shown})
+                }
+                #[cfg(windows)]
+                "ui_hide" => json!({"ok": true, "shown": crate::uihost::hide()}),
                 "suggest" => {
                     let started = Instant::now();
                     let roman = req.get("roman").and_then(Value::as_str).unwrap_or("");
