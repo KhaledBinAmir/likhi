@@ -16,7 +16,10 @@ use windows::Win32::System::Com::*;
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::TextServices::*;
-use windows::Win32::UI::WindowsAndMessaging::{GetGUIThreadInfo, GUITHREADINFO};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetForegroundWindow, GetGUIThreadInfo, GetSystemMetrics, GetWindowRect, GUITHREADINFO,
+    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+};
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 
 use crate::candidates::CandidateWindow;
@@ -26,6 +29,7 @@ use crate::edit::EditSession;
 use crate::engine::{Commit, Engine, COMMIT_DEADLINE_MS, TYPE_DEADLINE_MS};
 use crate::guids::GUID_DISPLAY_ATTRIBUTE;
 use crate::log;
+use crate::vlog;
 use crate::uielement::{CandidateUi, UiState};
 
 /// How many committed words are sent as context. The engine uses the last one; sending two costs
@@ -689,9 +693,21 @@ impl TextService_Impl {
             }));
             *self.window.borrow_mut() = Some(window);
         }
-        let anchor = match self.composition_rect(ctx).or_else(caret_rect) {
+        // Three sources, most precise first. The last one always answers while there is a focused
+        // window, so reaching the `None` arm now means there is nothing on screen to anchor to.
+        let anchor = match self
+            .composition_rect(ctx)
+            .or_else(caret_rect)
+            .or_else(|| {
+                let r = focus_window_rect();
+                if r.is_some() {
+                    vlog!("anchor: falling back to the focused window");
+                }
+                r
+            }) {
             Some(r) => r,
             None => {
+                log!("anchor: none available; the candidate list cannot be shown");
                 self.hide_window();
                 return;
             }
@@ -699,6 +715,20 @@ impl TextService_Impl {
         if let Some(w) = self.window.borrow().as_ref() {
             w.show(&candidates, cursor, &anchor);
         }
+        // The anchor decides where the list appears, and a rectangle in the wrong coordinate space
+        // puts it off the edge of the screen while every other step still reports success. Logged
+        // with the visible screen area so the two can be compared directly.
+        vlog!(
+            "anchor rect l={} t={} r={} b={} (virtual screen {}x{} at {},{})",
+            anchor.left,
+            anchor.top,
+            anchor.right,
+            anchor.bottom,
+            unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) },
+            unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) },
+            unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) },
+            unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) },
+        );
     }
 
     /// Screen rectangle of the composition, via a read-only edit session.
@@ -712,11 +742,25 @@ impl TextService_Impl {
             let view = unsafe { ctx2.GetActiveView() }?;
             let mut rect = RECT::default();
             let mut clipped = BOOL(0);
-            unsafe { view.GetTextExt(ec, &range, &mut rect, &mut clipped) }?;
-            // A zero-area rectangle is "not laid out yet", whatever the clipped flag says.
-            if !clipped.as_bool() && rect.right > rect.left && rect.bottom > rect.top {
-                out.set(Some(rect));
+            if let Err(e) = unsafe { view.GetTextExt(ec, &range, &mut rect, &mut clipped) } {
+                // TS_E_NOLAYOUT is ordinary for a composition created a moment ago. Anything else
+                // is worth seeing, because this decides whether the list can be placed at all.
+                vlog!("anchor: GetTextExt failed (0x{:08X})", e.code().0 as u32);
+                return Err(e);
             }
+            // A zero-area rectangle means "not laid out yet".
+            if rect.right <= rect.left || rect.bottom <= rect.top {
+                vlog!("anchor: composition rect is empty (clipped={})", clipped.as_bool());
+                return Ok(());
+            }
+            // A clipped rectangle used to be rejected here. That was wrong: clipped means the
+            // composition is partly scrolled out of view, not that its position is unknown. An
+            // application that always reports clipping was left with no anchor, and therefore no
+            // candidate list at all -- silently, because this path logged nothing either.
+            if clipped.as_bool() {
+                vlog!("anchor: composition rect is clipped; using it anyway");
+            }
+            out.set(Some(rect));
             Ok(())
         });
         if ok.is_err() {
@@ -737,6 +781,9 @@ fn caret_rect() -> Option<RECT> {
         // Thread 0: the foreground thread, which is the one typing.
         GetGUIThreadInfo(0, &mut info).ok()?;
         if info.hwndCaret.is_invalid() {
+            // A XAML application draws its own caret and never creates a system one, so this is
+            // the ordinary answer there rather than a failure.
+            vlog!("anchor: the focused thread has no system caret");
             return None;
         }
         let mut top_left = POINT { x: info.rcCaret.left, y: info.rcCaret.top };
@@ -754,6 +801,45 @@ fn caret_rect() -> Option<RECT> {
             top: top_left.y,
             right: bottom_right.x.max(top_left.x + 1),
             bottom: bottom_right.y,
+        })
+    }
+}
+
+/// The focused window, as a caret-sized box at its lower-left corner. The last-resort anchor.
+///
+/// Neither of the other two works in a XAML application: it draws its own caret, so there is no
+/// system caret to find, and its text layout is not reported through `GetTextExt`. Both come back
+/// empty, and the candidate list was then never shown -- which is what "Likhi types but shows no
+/// suggestions" in Telegram was. Anchoring on the window is imprecise, but it is the difference
+/// between a keyboard a person can pick words in and one that silently commits the first guess.
+///
+/// The lower-left corner rather than the centre because a text field in a chat application sits at
+/// the bottom of the window, and `place` puts the list above an anchor with no room below it.
+fn focus_window_rect() -> Option<RECT> {
+    unsafe {
+        let mut info = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        let hwnd = match GetGUIThreadInfo(0, &mut info) {
+            Ok(()) if !info.hwndFocus.is_invalid() => info.hwndFocus,
+            _ => GetForegroundWindow(),
+        };
+        if hwnd.is_invalid() {
+            return None;
+        }
+        let mut r = RECT::default();
+        GetWindowRect(hwnd, &mut r).ok()?;
+        if r.right <= r.left || r.bottom <= r.top {
+            return None;
+        }
+        // A thin box the height of a line of text, inset from the corner so the list does not sit
+        // flush against the window edge.
+        Some(RECT {
+            left: r.left + 12,
+            top: (r.bottom - 56).max(r.top),
+            right: r.left + 13,
+            bottom: (r.bottom - 12).max(r.top + 1),
         })
     }
 }

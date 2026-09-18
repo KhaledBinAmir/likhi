@@ -264,6 +264,7 @@ impl CandidateWindow {
         };
         let Some((w, h)) = size else { return };
         let (x, y) = place(anchor, w, h);
+        crate::vlog!("candidate window shown at {x},{y} size {w}x{h} ({} items)", candidates.len());
         unsafe {
             let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
             let _ = InvalidateRect(Some(hwnd), None, false);
