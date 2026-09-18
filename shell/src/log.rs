@@ -71,7 +71,36 @@ pub fn write(msg: &str) {
     }
 }
 
+/// Whether per-keystroke tracing is on, from `LIKHI_VERBOSE` in the environment.
+///
+/// Read once. Some lines are worth writing every time a word is composed -- where the candidate
+/// list was placed, which anchor produced it -- but at a keystroke a line they would fill the 2 MB
+/// cap in an afternoon and push out the rare events that explain a failure. They stay off unless
+/// someone is looking.
+pub fn verbose() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var_os("LIKHI_VERBOSE")
+            .map(|v| {
+                let v = v.to_string_lossy().to_ascii_lowercase();
+                !(v.is_empty() || v == "0" || v == "false" || v == "off")
+            })
+            .unwrap_or(false)
+    })
+}
+
 #[macro_export]
 macro_rules! log {
     ($($arg:tt)*) => { $crate::log::write(&format!($($arg)*)) };
+}
+
+/// A log line written only when `LIKHI_VERBOSE` is set. For anything that happens per keystroke.
+#[macro_export]
+macro_rules! vlog {
+    ($($arg:tt)*) => {
+        if $crate::log::verbose() {
+            $crate::log::write(&format!($($arg)*))
+        }
+    };
 }
