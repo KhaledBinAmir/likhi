@@ -45,6 +45,12 @@ pub const COMMIT_DEADLINE_MS: u32 = 400;
 const CONNECT_TIMEOUT_MS: u32 = 120;
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(CONNECT_TIMEOUT_MS as u64);
 const RETRY_AFTER: Duration = Duration::from_secs(2);
+/// Shorter, used just after starting the engine: it needs about 130 ms to be ready and waiting the
+/// full retry period would leave a word or two unsuggested for no reason.
+const START_RETRY_AFTER: Duration = Duration::from_millis(600);
+/// Don't try to start the engine more often than this. A failure to start is usually permanent --
+/// no permission, or nothing installed -- and retrying per keystroke would fork a process per key.
+const START_COOLDOWN: Duration = Duration::from_secs(30);
 
 /// The read timeout is derived from the caller's deadline, not fixed: the engine promises to answer
 /// within the deadline, so waiting much longer only means it is wedged, and a wedged engine must
@@ -293,6 +299,69 @@ pub struct Engine {
     retry_at: Option<Instant>,
 }
 
+/// The installed engine, found relative to this DLL rather than by searching or by configuration.
+///
+/// The installed layout is `<app>\shell\<arch>\LikhiTextService.dll` beside `<app>\engine\
+/// likhi-server.exe`, so the executable is three directories up and across. Relative because it is
+/// the one path that is right for every installation without anything being written down, and
+/// because this code is running inside somebody else's process where nothing about the environment
+/// can be assumed.
+fn engine_exe() -> Option<std::path::PathBuf> {
+    let dll = std::path::PathBuf::from(crate::module_path());
+    if dll.as_os_str().is_empty() {
+        return None;
+    }
+    // <arch> -> shell -> <app>
+    let app = dll.parent()?.parent()?.parent()?;
+    let exe = app.join("engine").join("likhi-server.exe");
+    exe.exists().then_some(exe)
+}
+
+/// Start the engine, at most once every `START_COOLDOWN`. Returns whether a process was launched.
+///
+/// Best effort in the strictest sense: inside a sandboxed application this cannot work at all,
+/// because an AppContainer may not launch an executable outside its own package. That is fine. The
+/// same user is typing in other applications that are not sandboxed, and the first keystroke in any
+/// of them brings the engine back for all of them.
+fn start_engine_once() -> bool {
+    use std::sync::Mutex;
+    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+
+    let Ok(mut last) = LAST.lock() else { return false };
+    if let Some(at) = *last {
+        if at.elapsed() < START_COOLDOWN {
+            return false;
+        }
+    }
+    *last = Some(Instant::now());
+
+    let Some(exe) = engine_exe() else {
+        log!("engine is not running and no installed likhi-server.exe was found next to this DLL");
+        return false;
+    };
+    // CREATE_NO_WINDOW: this is a background service and the person is typing in something else.
+    // DETACHED_PROCESS would also do, but it additionally denies the child a console it may want
+    // for its own logging when run by hand.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    use std::os::windows::process::CommandExt;
+    match std::process::Command::new(&exe)
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(child) => {
+            log!("engine was not running; started {} (pid {})", exe.display(), child.id());
+            true
+        }
+        Err(e) => {
+            log!("engine was not running and could not be started ({e})");
+            false
+        }
+    }
+}
+
 impl Engine {
     pub fn new(port: u16) -> Self {
         Engine {
@@ -333,7 +402,18 @@ impl Engine {
                 Ok(())
             }
             Err(e) => {
-                self.retry_at = Some(Instant::now() + RETRY_AFTER);
+                // Neither transport answered, so there is very likely no engine running. Start it.
+                //
+                // Worth doing because the alternative is what a Windows update did on 2026-09-18:
+                // the machine restarted, the engine did not come back, and the keyboard did nothing
+                // in every application with no indication why. A keyboard that repairs itself is
+                // the difference between "it broke" and nobody noticing.
+                //
+                // Not waited for. The engine takes about 130 ms to be ready and this runs on a
+                // keystroke, so this keystroke still goes without suggestions; the retry window is
+                // shortened so the next one picks it up.
+                let started = start_engine_once();
+                self.retry_at = Some(Instant::now() + if started { START_RETRY_AFTER } else { RETRY_AFTER });
                 Err(e)
             }
         }
