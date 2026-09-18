@@ -18,9 +18,24 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use windows::core::PCWSTR;
+use windows::Win32::Foundation::SYSTEMTIME;
 use windows::Win32::System::Diagnostics::Debug::OutputDebugStringW;
+use windows::Win32::System::SystemInformation::GetLocalTime;
 
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Local wall-clock time, to the millisecond.
+///
+/// Without this a log of 66 timeouts and one success says nothing about which came first, or which
+/// build produced them -- which is exactly the position a Store-app diagnosis left us in. Local
+/// rather than UTC because these are read next to a person saying "it broke just now".
+fn stamp() -> String {
+    let t: SYSTEMTIME = unsafe { GetLocalTime() };
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}",
+        t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds
+    )
+}
 
 fn path() -> Option<PathBuf> {
     let base = std::env::var_os("LOCALAPPDATA")?;
@@ -38,7 +53,7 @@ fn rotate_if_large(p: &PathBuf) {
 pub fn write(msg: &str) {
     let pid = std::process::id();
     let mut line = String::with_capacity(msg.len() + 32);
-    let _ = write!(line, "[likhi-tsf pid={pid}] {msg}");
+    let _ = write!(line, "{} [likhi-tsf pid={pid}] {msg}", stamp());
 
     let mut wide: Vec<u16> = line.encode_utf16().collect();
     wide.push(b'\n' as u16);

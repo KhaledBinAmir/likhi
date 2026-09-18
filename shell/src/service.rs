@@ -594,6 +594,11 @@ impl TextService_Impl {
         }
         self.ui_element_id.set(id);
         *self.ui_element.borrow_mut() = Some(element);
+
+        // Measured, not assumed: Telegram -- immersive, TF_TMF_IMMERSIVEMODE set -- answers
+        // show = TRUE and expects us to draw, exactly as Notepad does. A host that answers FALSE
+        // has not been observed yet, so this stays as TSF specifies rather than being overridden
+        // on a guess about what Store applications do.
         let ours = show.as_bool();
         self.draw_ourselves.set(ours);
         log!(
