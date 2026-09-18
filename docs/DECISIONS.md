@@ -1,5 +1,53 @@
 # Decision log
 
+## 2026-09-18: In a sandboxed application, the engine draws the candidate list
+
+- **Context.** Likhi typed Bangla in Telegram but showed no suggestions and committed whatever it
+  had ranked first. Three earlier explanations were wrong, including two of mine: that Store
+  applications answer `BeginUIElement` with `show = FALSE` (they answer TRUE), and that the problem
+  was Store applications at all.
+- **What it actually is.** A window created by a process inside an **AppContainer** never reaches
+  the desktop. `CreateWindowExW` returns a handle, `SetWindowPos` reports success, and nothing is
+  composed. Established by enumerating every window on the machine while typing:
+  `LikhiCandidateWindow` was present in Code, Notepad and WhatsApp, and absent from Telegram, while
+  Telegram's own log recorded showing a list at the correct screen coordinates on every keystroke.
+- **WhatsApp is the control.** Also a Store application, also immersive
+  (`TF_TMF_IMMERSIVEMODE`), and it works -- because `WhatsApp.Root.exe` runs at full trust. The
+  dividing line is the sandbox, not the Store, and it is not something an application can opt out
+  of. There is no fix available from inside the process.
+- **So the engine draws it.** It is an ordinary user process, so its windows do reach the desktop
+  and a topmost one sits above the sandboxed application. Two operations, `ui_show` and `ui_hide`.
+  This is what Microsoft's own IMEs do, for the same reason.
+- **Only the drawing moved.** What the candidates are, which is highlighted, when to commit and
+  when to refine all stay in the text service, which is the only side that knows what is being
+  typed. The engine is a remote control for a window.
+- **Routed on the token, not the path.** `TokenIsAppContainer`, because "packaged" and "sandboxed"
+  are different properties and only the second one matters. Applications that work today are
+  untouched and still draw in-process, which is the faster path and the better tested one.
+- **Cost measured before trusting it.** The added round trip per keystroke: p50 0.038 ms, p95
+  0.083 ms, worst of 200 calls 0.82 ms, against a 30 ms budget. The engine's side only posts to a
+  channel; the drawing happens on its own UI thread.
+- **The window is one shared crate, not a copy each.** Two copies would mean the list looked
+  different depending on which application you were typing in, and every fix would have to be made
+  twice.
+- **A window that outlives its client needs a watchdog.** An application killed mid-word would
+  leave a list on the desktop that nothing owns and nobody can dismiss. Twenty seconds without an
+  update and the engine takes it down; the ordinary path hides it long before that.
+
+## 2026-09-18: The text service starts the engine
+
+- A Windows update restarted the machine and the engine did not come back. The `Run` key only fires
+  at sign-in and nothing supervises the process, so the keyboard did nothing in every application
+  with no indication why. For a pilot that is the worst kind of failure: it reads as the whole
+  product being broken and produces no usable bug report.
+- When neither transport answers there is very likely no engine, so the text service starts it,
+  found relative to its own DLL. Not waited for -- the keystroke that discovers the problem still
+  goes without suggestions -- and at most once every 30 seconds, because a failure to start is
+  usually permanent and retrying per keystroke would fork a process per key.
+- It cannot work from inside a sandboxed application, which may not launch an executable outside its
+  package. That is acceptable: the same person is typing in other applications that are not
+  sandboxed, and the first keystroke in any of them brings the engine back for all of them.
+
 ## 2026-09-18: The Python is retired; the goldens become a fixed record
 
 - **Context.** After the engine was ported, the Python was kept as the reference implementation and
