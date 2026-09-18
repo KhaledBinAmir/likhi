@@ -185,11 +185,33 @@ impl Weights {
         .collect()
     }
 
-    fn get(&self, key: &str) -> f64 {
+    pub fn get(&self, key: &str) -> f64 {
         // Every key is present by construction: the defaults define the full set and a tuned file
         // only overwrites. A miss is a programming error, and returning 0.0 would hide it as a
         // subtly worse ranking rather than a crash.
         *self.0.get(key).unwrap_or_else(|| panic!("no weight named {key}"))
+    }
+
+    /// The untuned defaults, which are what the engine falls back to when no `weights.json` is
+    /// found -- about seven points of top-1 worse than the tuned set.
+    pub fn defaults() -> Weights {
+        Weights(Weights::default_map())
+    }
+
+    pub fn from_map(map: HashMap<String, f64>) -> Weights {
+        let mut w = Weights::default_map();
+        w.extend(map);
+        Weights(w)
+    }
+
+    /// Set one weight. Only the tuner does this; the engine's weights are fixed at load.
+    pub fn set(&mut self, key: &str, value: f64) {
+        assert!(self.0.contains_key(key), "no weight named {key}");
+        self.0.insert(key.to_string(), value);
+    }
+
+    pub fn as_map(&self) -> &HashMap<String, f64> {
+        &self.0
     }
 }
 
@@ -223,6 +245,16 @@ pub struct Engine {
 /// (`AbortedError`); here it is an absent result.
 #[derive(Debug)]
 pub struct Aborted;
+
+/// Knobs on candidate gathering that only the weight tuner uses. Defaults match what the shipped
+/// engine does on every keystroke.
+#[derive(Debug, Clone, Default)]
+pub struct CandidateOptions {
+    /// Rank candidates for model scoring with a weight-independent heuristic. See `candidates_with`.
+    pub static_prescore: bool,
+    /// Override how many non-beam candidates get a model score. `None` uses the engine's setting.
+    pub model_scored: Option<usize>,
+}
 
 pub struct EngineOptions {
     pub beam: usize,
@@ -361,8 +393,25 @@ impl Engine {
     }
 
     pub fn candidates(&self, roman: &str, use_model: bool) -> FeatTable {
-        self.candidates_abortable(roman, use_model, None)
+        self.candidates_with(roman, use_model, &CandidateOptions::default(), None)
             .expect("no abort flag was given, so this cannot be abandoned")
+    }
+
+    /// Gather candidates with the knobs the weight tuner needs.
+    ///
+    /// `static_prescore` picks which candidates get a model score using a ranking that does not
+    /// consult the weights. The tuner needs it: it computes features once and then searches over
+    /// weights, so if the *choice of which candidates were scored* depended on the weights, the
+    /// cache would silently encode the weights it was built with and every later comparison would
+    /// be against a moving target.
+    pub fn candidates_with(
+        &self,
+        roman: &str,
+        use_model: bool,
+        opts: &CandidateOptions,
+        abort: Option<&AtomicBool>,
+    ) -> Result<FeatTable, Aborted> {
+        self.gather(roman, use_model, opts, abort)
     }
 
     /// Gather candidates, giving up if `abort` is raised between the expensive stages.
@@ -374,6 +423,16 @@ impl Engine {
         &self,
         roman: &str,
         use_model: bool,
+        abort: Option<&AtomicBool>,
+    ) -> Result<FeatTable, Aborted> {
+        self.gather(roman, use_model, &CandidateOptions::default(), abort)
+    }
+
+    fn gather(
+        &self,
+        roman: &str,
+        use_model: bool,
+        opts: &CandidateOptions,
         abort: Option<&AtomicBool>,
     ) -> Result<FeatTable, Aborted> {
         let give_up = || abort.is_some_and(|a| a.load(Ordering::Relaxed));
@@ -595,14 +654,20 @@ impl Engine {
             // Stable, so equal scores keep insertion order, as Python's sorted does.
             let scores: Vec<f64> = unscored
                 .iter()
-                .map(|&i| self.score_inner(&t.order[i], &t.feats[i], &[]))
+                .map(|&i| {
+                    if opts.static_prescore {
+                        self.static_prescore(&t.order[i], &t.feats[i])
+                    } else {
+                        self.score_inner(&t.order[i], &t.feats[i], &[])
+                    }
+                })
                 .collect();
             let mut order: Vec<usize> = (0..unscored.len()).collect();
             order.sort_by(|&a, &b| {
                 scores[b].partial_cmp(&scores[a]).unwrap_or(std::cmp::Ordering::Equal)
             });
             unscored = order.into_iter().map(|j| unscored[j]).collect();
-            unscored.truncate(self.model_scored);
+            unscored.truncate(opts.model_scored.unwrap_or(self.model_scored));
 
             let words: Vec<String> = unscored.iter().map(|&i| t.order[i].clone()).collect();
             if !words.is_empty() {
@@ -616,8 +681,41 @@ impl Engine {
         Ok(t)
     }
 
+    /// Weight-independent ranking, used only to pick which candidates deserve a model score.
+    ///
+    /// A port of `LikhiEngine._static_prescore`. The constants are not the ranker's weights and are
+    /// deliberately not tunable: the point is a ranking the tuner's search cannot influence.
+    fn static_prescore(&self, word: &str, ft: &Feats) -> f64 {
+        let mut s = self.unigram_logp(word);
+        s += 3.0 * f64::from(ft.rom_exact > 0) + 0.5 * (ft.rom_exact as f64).ln_1p();
+        s += 1.5 * f64::from(ft.key_fine) + 0.8 * f64::from(ft.key_coarse);
+        s += 2.5 * f64::from(ft.xlit_rank > 0) + 1.0 * f64::from(ft.avro);
+        s -= 1.0
+            * f64::from(ft.key_fine_prefix || ft.key_coarse_prefix || ft.rom_prefix > 0)
+            * f64::from(ft.rom_exact == 0);
+        s
+    }
+
     fn score_inner(&self, word: &str, ft: &Feats, context: &[String]) -> f64 {
-        let w = &self.w;
+        let mut s = score_features(word, ft, self.unigram_logp(word), &self.w);
+        if !context.is_empty() && !ft.is_latin {
+            s += self.w.get("bigram") * self.context_adjust(word, context);
+        }
+        s
+    }
+}
+
+/// The ranker, over one candidate's features and its unigram prior.
+///
+/// A free function taking `uni` rather than a method, so the weight tuner can score cached features
+/// without an engine -- and, more importantly, without a second copy of this formula. The Python
+/// has exactly that second copy, in `eval/tune.py`, under a comment asking whoever edits one to
+/// remember the other. That is the kind of duplication that stays correct right up until it
+/// silently does not.
+///
+/// The bigram term is not here because it needs the lexicon; `score_inner` adds it.
+pub fn score_features(word: &str, ft: &Feats, unigram_logp: f64, w: &Weights) -> f64 {
+    {
         if ft.is_latin {
             // Raw Latin only competes once the user has chosen it before, and then on personal
             // evidence rather than on Bangla corpus frequency.
@@ -625,7 +723,7 @@ impl Engine {
                 + w.get("latin")
                 + personal_bonus(w, ft.personal_sel, ft.personal_share);
         }
-        let mut uni = self.unigram_logp(word);
+        let mut uni = unigram_logp;
         let xl = ft.xlit_logp;
         let acronym = !ft.in_lexicon && looks_like_acronym(word);
         if !ft.in_lexicon && !xl.is_nan() && !acronym {
@@ -635,9 +733,6 @@ impl Engine {
             uni += (UNKNOWN_CONFIDENT_LOGP - uni) * confidence;
         }
         let mut s = w.get("unigram") * uni;
-        if !context.is_empty() {
-            s += w.get("bigram") * self.context_adjust(word, context);
-        }
         if ft.rom_exact > 0 {
             s += w.get("rom_exact") + w.get("rom_exact_log") * (1.0 + ft.rom_exact as f64).ln();
         }
@@ -688,9 +783,16 @@ impl Engine {
         }
         s
     }
+}
 
+impl Engine {
     pub fn score(&self, word: &str, ft: &Feats, context: &[String]) -> f64 {
         self.score_inner(word, ft, context)
+    }
+
+    /// The ranker weights, for the tuner.
+    pub fn weights(&self) -> &Weights {
+        &self.w
     }
 
     /// Ranked candidates. `fast` skips the transliteration model.

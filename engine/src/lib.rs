@@ -14,6 +14,9 @@
 
 pub mod avro;
 pub mod core;
+/// The evaluation harness. Behind `tools`, so it is absent from the shipped engine.
+#[cfg(feature = "tools")]
+pub mod evalkit;
 pub mod http;
 pub mod lexicon;
 pub mod personal;

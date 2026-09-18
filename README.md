@@ -82,7 +82,7 @@ research side needs Python 3.12 and [uv](https://docs.astral.sh/uv/).
 uv sync --all-extras
 uv run python scripts/fetch_datasets.py --all                      # datasets + IndicXlit checkpoint
 uv run python scripts/convert_indicxlit.py --src data/raw/indicxlit --npz models/indicxlit-np
-uv run likhi-eval words --system likhi --dataset dakshina-test      # measure
+uv run likhi-eval words --system likhi --dataset dakshina-test      # measure (Python reference)
 uv run pytest                                                       # the Python engine's own tests
 ```
 
@@ -104,6 +104,24 @@ points of top-1 silently.
 `build_rust_data.py` still converts the transliteration model and the Avro rule tables, because
 their sources are a NumPy `.npz` and a Python module. It can also convert old `.marisa` tries with
 `--skip-model --skip-avro`, which is now only useful for comparing the two builders.
+
+Measuring and tuning, which is where ranking work happens:
+
+```
+cd engine
+cargo build --release --features tools
+
+# accuracy: ~2 minutes across all cores, against ~12 in Python
+target/release/likhi-eval words --dataset dakshina-dev
+
+# ranker weights: cache features once, then search over weights in seconds
+target/release/likhi-tune cache  --dataset dakshina-dev --dataset banglatlit-val-words
+target/release/likhi-tune search --metric top1
+```
+
+`likhi-tune search` refuses to overwrite an existing `weights.json` from a small cache. Those
+weights are worth roughly seven points of top-1, and a search over a few hundred items will happily
+produce worse ones; use `--out` to write elsewhere while experimenting.
 
 Building what ships:
 

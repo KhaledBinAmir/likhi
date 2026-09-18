@@ -477,6 +477,8 @@ mod tests {
     /// The interesting ones are 3.15 and 3.35, which look like symmetric ties and are not: the
     /// nearest double to 3.15 is below it and the nearest to 3.35 is above it, so they round in
     /// opposite directions.
+    // 3.14 here is a rounding test case taken from CPython, not an approximation of pi.
+    #[allow(clippy::approx_constant)]
     #[test]
     fn rounding_matches_python_round() {
         for (input, want) in [
