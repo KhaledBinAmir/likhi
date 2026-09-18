@@ -328,39 +328,52 @@ fn start_engine_once() -> bool {
     use std::sync::Mutex;
     static LAST: Mutex<Option<Instant>> = Mutex::new(None);
 
-    let Ok(mut last) = LAST.lock() else { return false };
-    if let Some(at) = *last {
-        if at.elapsed() < START_COOLDOWN {
-            return false;
-        }
-    }
-    *last = Some(Instant::now());
-
-    let Some(exe) = engine_exe() else {
-        log!("engine is not running and no installed likhi-server.exe was found next to this DLL");
-        return false;
-    };
-    // CREATE_NO_WINDOW: this is a background service and the person is typing in something else.
-    // DETACHED_PROCESS would also do, but it additionally denies the child a console it may want
-    // for its own logging when run by hand.
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    use std::os::windows::process::CommandExt;
-    match std::process::Command::new(&exe)
-        .creation_flags(CREATE_NO_WINDOW)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
     {
-        Ok(child) => {
-            log!("engine was not running; started {} (pid {})", exe.display(), child.id());
-            true
+        let Ok(mut last) = LAST.lock() else { return false };
+        if let Some(at) = *last {
+            if at.elapsed() < START_COOLDOWN {
+                return false;
+            }
         }
-        Err(e) => {
-            log!("engine was not running and could not be started ({e})");
-            false
-        }
+        *last = Some(Instant::now());
     }
+
+    // On a thread of its own, and nothing here touches the filesystem first.
+    //
+    // `CreateProcess` blocks while Windows Defender scans a binary it has not seen before, which
+    // measured 102-155 ms for a freshly installed engine against 6-8 ms once scanned. Looking the
+    // executable up costs a file stat on top of that. This function is reached from inside a
+    // keystroke on the application's UI thread, where the entire budget is 30 ms, so none of it may
+    // happen here. Nothing waits on the result anyway: the retry a moment later is what picks the
+    // engine up.
+    std::thread::Builder::new()
+        .name("likhi-start-engine".into())
+        .spawn(|| {
+            let Some(exe) = engine_exe() else {
+                log!("engine is not running and no installed likhi-server.exe was found next to this DLL");
+                return;
+            };
+            // CREATE_NO_WINDOW: this is a background service and the person is typing in something
+            // else. DETACHED_PROCESS would also do, but it additionally denies the child a console
+            // it may want for its own logging when run by hand.
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            use std::os::windows::process::CommandExt;
+            match std::process::Command::new(&exe)
+                .creation_flags(CREATE_NO_WINDOW)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                Ok(child) => log!(
+                    "engine was not running; started {} (pid {})",
+                    exe.display(),
+                    child.id()
+                ),
+                Err(e) => log!("engine was not running and could not be started ({e})"),
+            }
+        })
+        .is_ok()
 }
 
 impl Engine {

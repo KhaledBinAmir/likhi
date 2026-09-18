@@ -207,6 +207,20 @@ pub fn available() -> bool {
     host().is_some()
 }
 
+/// Build the window now, on a thread of our own, rather than when the first request needs it.
+///
+/// Starting it lazily meant the first `ui_show` waited for the UI thread and the window to exist,
+/// up to five seconds, on whichever request thread happened to ask first. That is a request the
+/// text service is blocking on inside a keystroke. Called once at startup, so by the time anyone
+/// types the window is already there and `ui_show` only posts to a channel.
+pub fn prewarm() {
+    let _ = std::thread::Builder::new()
+        .name("likhi-ui-prewarm".into())
+        .spawn(|| {
+            let _ = host();
+        });
+}
+
 // A window handle that is never read outside the UI thread; present so the unused-import lint does
 // not fire on HWND in builds where the window fails to create.
 #[allow(dead_code)]
