@@ -46,3 +46,6 @@ Thumbs.db
 shell/target/
 engine/target/
 
+# Reviewed by hand, then appended to data/feedback/words.jsonl. Until then it holds real
+# testers' typed words and does not belong in the repository.
+pilot-words*.jsonl

@@ -388,14 +388,19 @@ fn cmd_collect(drop: &str, min_installs: usize, limit: usize, out: Option<&str>)
     installs.sort();
     println!("{} installs reporting in {}\n", installs.len(), drop.display());
     println!(
-        "{:18} {:>8} {:>7} {:>8} {:>7} {:>7} {:>10}",
-        "install", "words", "top1%", "retyped", "p50ms", "p95ms", "struggles"
+        "{:18} {:>8} {:>7} {:>8} {:>7} {:>7} {:>8} {:>9}",
+        "install", "words", "top1%", "retyped", "p50ms", "p95ms", "misses", "friction"
     );
 
     let (mut total_words, mut total_top1) = (0.0f64, 0.0f64);
-    // (roman, chose) -> installs that saw it, and what we wrongly ranked first
-    let mut word_installs: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+    // A ranking miss: (roman, chose) -> installs that saw it, and what we wrongly ranked first.
+    let mut miss_installs: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
     let mut word_wrong: BTreeMap<(String, String), BTreeMap<String, usize>> = BTreeMap::new();
+    // Typing friction: our first suggestion was taken, but the word was retyped on the way.
+    let mut friction_counts: BTreeMap<(String, String), usize> = BTreeMap::new();
+    // Which position held the word they wanted, when ours was wrong. 1 means the second entry.
+    let mut chosen_at: BTreeMap<usize, usize> = BTreeMap::new();
+    let (mut misses, mut friction) = (0usize, 0usize);
 
     for inst in &installs {
         let name = inst.file_name().and_then(|n| n.to_str()).unwrap_or("?").to_string();
@@ -426,28 +431,46 @@ fn cmd_collect(drop: &str, min_installs: usize, limit: usize, out: Option<&str>)
         };
         total_words += words;
         total_top1 += top1;
+        let (before_misses, before_friction) = (misses, friction);
+        for e in &events {
+            let (roman, chose) = (text(e, "roman").to_string(), text(e, "chose").to_string());
+            if roman.is_empty() || chose.is_empty() {
+                continue;
+            }
+            // Two different things are recorded here and they must not be added together.
+            //
+            // `pos > 0` is a ranking miss: the word they wanted was not the one we put first.
+            // `pos == 0` with `retyped` is typing friction: our first suggestion *was* the word
+            // they took, they just used backspace getting there. On the first pilot data, 127 of
+            // 174 events were the second kind, and reporting them together made a list of words
+            // Likhi gets right look like a list of failures -- and would have put them into the
+            // feedback set, where they teach nothing.
+            let pos = e.get("pos").and_then(serde_json::Value::as_u64).unwrap_or(0);
+            let key = (roman, chose);
+            if pos > 0 {
+                miss_installs.entry(key.clone()).or_default().insert(name.clone());
+                let we_said = text(e, "we_said");
+                if !we_said.is_empty() {
+                    *word_wrong.entry(key).or_default().entry(we_said.to_string()).or_insert(0) += 1;
+                }
+                *chosen_at.entry(pos as usize).or_insert(0) += 1;
+                misses += 1;
+            } else {
+                *friction_counts.entry(key).or_insert(0) += 1;
+                friction += 1;
+            }
+        }
         println!(
-            "{} {:>8} {:>7.1} {:>8} {:>7.1} {:>7.1} {:>10}",
+            "{} {:>8} {:>7.1} {:>8} {:>7.1} {:>7.1} {:>8} {:>9}",
             pad(&name, 18),
             words as i64,
             pct(top1, words),
             retyped as i64,
             mean("lat_p50"),
             mean("lat_p95"),
-            events.len()
+            misses - before_misses,
+            friction - before_friction
         );
-        for e in &events {
-            let (roman, chose) = (text(e, "roman").to_string(), text(e, "chose").to_string());
-            if roman.is_empty() || chose.is_empty() {
-                continue;
-            }
-            let key = (roman, chose);
-            word_installs.entry(key.clone()).or_default().insert(name.clone());
-            let we_said = text(e, "we_said");
-            if !we_said.is_empty() {
-                *word_wrong.entry(key).or_default().entry(we_said.to_string()).or_insert(0) += 1;
-            }
-        }
     }
     println!(
         "\ntotal words {}, first suggestion taken {:.1}%",
@@ -455,14 +478,36 @@ fn cmd_collect(drop: &str, min_installs: usize, limit: usize, out: Option<&str>)
         pct(total_top1, total_words)
     );
 
-    let shared: Vec<(&(String, String), &BTreeSet<String>)> = word_installs
+    // What the two kinds of event add up to, so the next section is not read as the whole story.
+    println!(
+        "\n{misses} ranking misses (our first suggestion was not the word taken)"
+    );
+    if !chosen_at.is_empty() {
+        let near: usize = chosen_at.iter().filter(|(p, _)| **p == 1).map(|(_, n)| *n).sum();
+        println!(
+            "  the word they wanted was second {}/{} times ({:.0}%), so it was on screen and one key away",
+            near,
+            misses,
+            100.0 * near as f64 / misses.max(1) as f64
+        );
+        let positions: Vec<String> = chosen_at
+            .iter()
+            .map(|(p, n)| format!("#{}: {n}", p + 1))
+            .collect();
+        println!("  position taken: {}", positions.join("   "));
+    }
+    println!(
+        "{friction} typing friction (our first suggestion WAS taken; the word was retyped on the way)"
+    );
+
+    let shared: Vec<(&(String, String), &BTreeSet<String>)> = miss_installs
         .iter()
         .filter(|(_, v)| v.len() >= min_installs)
         .collect();
     println!(
-        "\nstruggle words seen on >= {min_installs} installs: {} of {}",
+        "\nranking misses seen on >= {min_installs} installs: {} of {}",
         shared.len(),
-        word_installs.len()
+        miss_installs.len()
     );
     println!(
         "{:<18} {:<16} {:<16} {:>8}",
@@ -492,7 +537,23 @@ fn cmd_collect(drop: &str, min_installs: usize, limit: usize, out: Option<&str>)
         );
     }
 
+    // Friction is a different question -- where typing is awkward rather than where ranking is
+    // wrong -- so it gets its own short list and never reaches the feedback set.
+    if friction > 0 {
+        println!("\nmost retyped words (we ranked these first and they were taken)");
+        let mut top: Vec<(&(String, String), &usize)> = friction_counts.iter().collect();
+        top.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+        println!("{:<18} {:<16} {:>8}", "typed", "they chose", "times");
+        for ((roman, chose), n) in top.iter().take(12) {
+            println!("{} {} {:>8}", pad(roman, 18), pad(chose, 16), n);
+        }
+    }
+
     if let Some(out) = out {
+        // Only the ranking misses. A word we already put first teaches the ranker nothing, and
+        // adding it to the feedback set would dilute the one measurement that decides whether a
+        // change helped -- on the first pilot data that would have been 127 rows of 174.
+        //
         // A struct, not a map: serde writes fields in declaration order, which keeps these rows
         // shaped like the ones already in data/feedback/words.jsonl.
         #[derive(serde::Serialize)]
