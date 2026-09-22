@@ -85,6 +85,12 @@ pub struct Commit<'a> {
     pub retyped: bool,
     pub app: &'a str,
     pub context: &'a [String],
+    /// The slowest keystroke of this word, in milliseconds, or None when nothing was measured.
+    ///
+    /// The engine has always read this from the request and aggregated it into the pilot's latency
+    /// percentiles; nothing ever sent it, so those percentiles have read zero on every install
+    /// since the pilot began.
+    pub latency_ms: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -506,6 +512,7 @@ impl Engine {
             "retyped": commit.retyped,
             "app": commit.app,
             "context": commit.context,
+            "latency_ms": commit.latency_ms,
         })
         .to_string();
         if let Err(e) = self.call(&request, read_timeout_for(COMMIT_DEADLINE_MS)) {

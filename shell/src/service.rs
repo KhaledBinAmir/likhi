@@ -59,6 +59,14 @@ struct State {
     retyped: bool,
     /// Recently committed words, oldest first.
     context: Vec<String>,
+    /// The slowest keystroke of the word being typed, in microseconds.
+    ///
+    /// This is the number the whole engine design is answerable to, and until now nothing measured
+    /// it: the engine has always looked for a `latency_ms` on every commit and the text service has
+    /// never sent one, so the pilot's latency columns have read 0.0 since the first install. What is
+    /// timed is the span the host application is blocked inside `OnKeyDown`, because that is what a
+    /// typist actually feels, rather than the engine's own view of how long it took.
+    worst_key_us: u64,
     engine: Engine,
 }
 
@@ -74,6 +82,7 @@ impl State {
             strong: false,
             retyped: false,
             context: Vec::new(),
+            worst_key_us: 0,
             engine: Engine::new(port),
         }
     }
@@ -87,6 +96,7 @@ impl State {
         self.partial = false;
         self.strong = false;
         self.retyped = false;
+        self.worst_key_us = 0;
     }
 
     /// Whether asking the engine again could improve this answer.
@@ -517,6 +527,14 @@ impl TextService_Impl {
             let context = s.context.clone();
             let top1 = s.candidates.first().cloned().unwrap_or_default();
             let retyped = s.retyped;
+            // The slowest keystroke of this word. The key being handled right now is the one that
+            // commits, and its own cost is not known yet and would not belong here anyway: a commit
+            // deliberately waits longer than a typing keystroke, and mixing the two would hide the
+            // number this is for.
+            let latency_ms = match s.worst_key_us {
+                0 => None,
+                us => Some(us as f64 / 1000.0),
+            };
             if !buffer.is_empty() {
                 s.engine.learn(&Commit {
                     roman: &buffer,
@@ -526,6 +544,7 @@ impl TextService_Impl {
                     retyped,
                     app: &self.app_name,
                     context: &context,
+                    latency_ms,
                 });
             }
             s.remember(&word);
@@ -1056,7 +1075,21 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             return Ok(BOOL(0));
         }
         let ctx = pic.ok()?.clone();
-        if let Err(e) = self.handle(&ctx, vk) {
+
+        // The span the host application is blocked for. Everything this keyboard does to a
+        // keystroke happens inside `handle`, so this is the whole cost, measured where the typist
+        // pays it rather than where the engine reports it.
+        let started = std::time::Instant::now();
+        let outcome = self.handle(&ctx, vk);
+        let micros = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+        // `try_borrow_mut`, not `borrow_mut`: a host that re-enters us here must never take an
+        // application down over a measurement. A dropped sample is worth nothing; a panic across
+        // the COM boundary aborts the process.
+        if let Ok(mut s) = self.state.try_borrow_mut() {
+            s.worst_key_us = s.worst_key_us.max(micros);
+        }
+
+        if let Err(e) = outcome {
             // Never let a failure escape into the host: log it, drop our state, and let the key go.
             log!("key {vk:#x} failed: {e}");
             self.reset();
