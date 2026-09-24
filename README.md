@@ -182,6 +182,34 @@ ISCC.exe installer/likhi.iss                # dist/LikhiSetup-<version>.exe
 
 Baselines and results live in `results/` and are summarized by `likhi-eval report`.
 
+### Publishing a release
+
+**Since 0.5.0, publishing a release is shipping it.** Every installation checks once a day, and a
+release that carries a signed manifest is offered to all of them. So a release is published only
+when it is meant for everyone, and a test build is never uploaded with a manifest.
+
+```
+# 1. the one place the version number is written
+#    installer/likhi.iss:   #define AppVersion "x.y.z"      (and a changelog entry above it)
+
+uv run python scripts/build_engine.py      # reads the version from likhi.iss and bakes it in
+uv run python scripts/build_shell.py
+uv run python scripts/build_app.py
+uv run python scripts/build_client.py
+ISCC.exe installer/likhi.iss               # dist/LikhiSetup-x.y.z.exe
+
+# 2. sign: writes latest.json and latest.json.sig, and checks them against the keys the engine trusts
+engine/target/release/likhi-sign.exe manifest --installer dist/LikhiSetup-x.y.z.exe --version x.y.z --out dist/release-x.y.z
+
+# 3. publish all three files together
+gh release create vx.y.z dist/release-x.y.z/LikhiSetup-x.y.z.exe dist/release-x.y.z/latest.json dist/release-x.y.z/latest.json.sig --prerelease
+```
+
+The signing key lives at `%USERPROFILE%\.likhi\update-signing.key`, outside the repository, and
+only `likhi-sign` reads it. Anyone who holds it can publish an update every installation will
+accept, so it belongs in a password manager and nowhere else. Losing it is recoverable -- ship a
+build that trusts a new key, which testers install by hand once -- but leaking it is not.
+
 Telemetry from a pilot is handled by `likhi-report`, which is also Rust and also behind the `tools`
 feature, so it is never part of an installation:
 
