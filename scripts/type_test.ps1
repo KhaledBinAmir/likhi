@@ -23,6 +23,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# "-Case a,b" arrives as one string when the script is run with -File.
+$Case = @($Case | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 
 Add-Type -TypeDefinition @'
@@ -99,6 +101,23 @@ public static class Keys
             Thread.Sleep(150);
         }
         return InFront();
+    }
+
+    [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+
+    // A real left click at (x, y), in the same coordinates UI Automation reports to this process.
+    // Refuses unless the target is in front, like a keystroke.
+    public static void Click(int x, int y)
+    {
+        if (!InFront()) throw new Exception("stopped: Notepad is no longer the foreground window");
+        SetCursorPos(x, y);
+        Thread.Sleep(50);
+        var i = new INPUT[2];
+        i[0].type = 0; i[0].u.mi.flags = 0x0002; // MOUSEEVENTF_LEFTDOWN
+        i[1].type = 0; i[1].u.mi.flags = 0x0004; // MOUSEEVENTF_LEFTUP
+        if (SendInput(2, i, Marshal.SizeOf(typeof(INPUT))) != 2)
+            throw new Exception("SendInput (mouse) failed: " + Marshal.GetLastWin32Error());
+        Thread.Sleep(200);
     }
 
     // One key, pressed and released, with modifiers held around it. Refuses unless the target is in
@@ -229,12 +248,18 @@ public static class Wnd
 
 function U([string]$s) { [regex]::Unescape($s) }
 $AMI = U '\u0986\u09AE\u09BF'   # "ami" -> the first-person pronoun
+# From code points: an editing tool once turned \u escapes written here into the characters
+# themselves, which Windows PowerShell then read as ANSI.
+$TUMI = -join [char[]](0x09A4, 0x09C1, 0x09AE, 0x09BF)   # "tumi" -> you
 
 # ----------------------------------------------------------------------------------- the machine
 
 $likhiDir = 'C:\Program Files\Likhi'
 $engineExe = Join-Path $likhiDir 'engine\likhi-server.exe'
 $userConfig = Join-Path $env:LOCALAPPDATA 'Likhi\config.json'
+# The personal dictionary learns from every word committed, test words included; it is put back
+# exactly as it was, so a run teaches this person's keyboard nothing.
+$personal = @('personal.sqlite', 'personal.sqlite-wal', 'personal.sqlite-shm') | ForEach-Object { Join-Path $env:LOCALAPPDATA "Likhi\$_" }
 $marker = Join-Path $env:LOCALAPPDATA 'Likhi\exited'
 $pipe = "\\.\pipe\likhi-engine-s$((Get-Process -Id $PID).SessionId)"
 
@@ -277,14 +302,14 @@ function Next-Word([string]$after) {
 }
 
 # The text service's placement rule for first-letter predictions (with_predictions in
-# shell/src/service.rs): up to two after the second entry, moved up if already lower.
+# shell/src/service.rs): up to two after the third entry, moved up if already lower.
 function Merge-Predictions($base, $predicted, [int]$k = 5) {
     $list = New-Object System.Collections.Generic.List[string]
-    $head = @($base | Select-Object -First 2)
+    $head = @($base | Select-Object -First 3)
     foreach ($w in $head) { $list.Add($w) }
     $extra = @($predicted | Where-Object { $head -notcontains $_ } | Select-Object -First 2)
     foreach ($w in $extra) { $list.Add($w) }
-    foreach ($w in @($base | Select-Object -Skip 2)) { if ($extra -notcontains $w) { $list.Add($w) } }
+    foreach ($w in @($base | Select-Object -Skip 3)) { if ($extra -notcontains $w) { $list.Add($w) } }
     return @($list | Select-Object -First $k)
 }
 
@@ -306,17 +331,21 @@ function Set-UserSetting([string]$key, [string]$jsonValue) {
 $vkFor = @{ ' ' = 0x20 }
 foreach ($c in [char[]]'abcdefghijklmnopqrstuvwxyz') { $vkFor[[string]$c] = [int][char]::ToUpper($c) }
 foreach ($d in 0..9) { $vkFor[[string]$d] = 0x30 + $d }
-$named = @{ TAB = 0x09; ESC = 0x1B; BACK = 0x08; ENTER = 0x0D; F12 = 0x7B; LEFT = 0x25; RIGHT = 0x27 }
+$named = @{ TAB = 0x09; ESC = 0x1B; BACK = 0x08; ENTER = 0x0D; F12 = 0x7B; LEFT = 0x25; RIGHT = 0x27
+    HOME = 0x24; END = 0x23; DELETE = 0x2E }
 
-# "ami {TAB}x" -> keystrokes. Braces name a key, {WAIT} pauses; everything else is typed as itself.
+# "ami {TAB}x" -> keystrokes. Braces name a key ({^END} holds Ctrl), {WAIT} pauses; everything else
+# is typed as itself.
 function Send-Keys([string]$text) {
     $i = 0
     while ($i -lt $text.Length) {
         if ($text[$i] -eq '{') {
             $end = $text.IndexOf('}', $i)
             $name = $text.Substring($i + 1, $end - $i - 1)
+            $ctrl = $name.StartsWith('^')
+            if ($ctrl) { $name = $name.Substring(1) }
             if ($name -eq 'WAIT') { Start-Sleep -Milliseconds 1500 }
-            else { [Keys]::Press([uint16]$named[$name], $false, $false, $KeyDelayMs) }
+            else { [Keys]::Press([uint16]$named[$name], $false, $ctrl, $KeyDelayMs) }
             $i = $end + 1
             continue
         }
@@ -340,7 +369,16 @@ function Document {
 
 function Text { ((Document).DocumentRange.GetText(-1) -replace "`r`n", "`n") -replace "`r", "`n" }
 
-# Put the caret at the start of the document without a keystroke, the way a mouse click would.
+# A real mouse click just before the first character of the document.
+function Click-DocumentStart {
+    $rects = (Document).DocumentRange.GetBoundingRectangles()
+    if (-not $rects -or $rects.Count -eq 0) { throw 'the document reported no text position to click' }
+    $r = $rects[0]
+    [Keys]::Click([int]($r.Left + 1), [int]($r.Top + $r.Height / 2))
+}
+
+# Put the caret at the start of the document without a keystroke. Not what a click does: an
+# application does not end the word being typed for this, and a click it does.
 function Move-CaretHome {
     $r = (Document).DocumentRange.Clone()
     $r.MoveEndpointByRange([System.Windows.Automation.Text.TextPatternRangeEndpoint]::End, $r,
@@ -409,6 +447,41 @@ $cases = [ordered]@{
         Clear-Document; Send-Keys 'Ami '
         Expect-Text "$AMI "
     }
+    # Keys that end a word without being part of it commit the highlighted word first, then do
+    # their own job. They used to leave the Latin behind.
+    tab_commits = {
+        Clear-Document; Send-Keys 'ami{TAB}'
+        Expect-Text "$AMI`t"
+    }
+    home_commits = {
+        Clear-Document; Send-Keys 'ami{HOME}ami '
+        Expect-Text "$AMI $AMI"
+    }
+    delete_commits = {
+        Clear-Document; Send-Keys 'ami{DELETE}'
+        Expect-Text "$AMI"
+    }
+    ctrl_commits = {
+        Clear-Document; Send-Keys 'ami{^END} '
+        Expect-Text "$AMI "
+    }
+    # A click elsewhere ends the word without a key: the application ends it, and it must end as
+    # the highlighted Bangla, not the Latin on screen.
+    click_commits = {
+        Clear-Document; Send-Keys 'ami tumi'
+        Click-DocumentStart
+        Expect-Text "$AMI $TUMI"
+    }
+    # The guess straight after Space is off unless configured.
+    after_space_off_by_default = {
+        $w = Predictable
+        Set-UserSetting 'next_word_after_space' 'false'
+        Start-Sleep -Milliseconds 2500
+        Clear-Document; Send-Keys "$($w.Roman) "
+        Expect-List $false
+        Set-UserSetting 'next_word_after_space' 'true'
+        Start-Sleep -Milliseconds 2500
+    }
     # The suggestion appears after Space, and Tab types it followed by a space.
     predict_tab = {
         $w = Predictable
@@ -450,27 +523,31 @@ $cases = [ordered]@{
         Expect-List $false
     }
     # First-letter prediction: after the previous word and one letter, a word that usually follows
-    # is in the ordinary list at the position the placement rule gives, and its number types it.
+    # is in the list at the position the placement rule gives -- fourth -- and its number types it.
     predict_letter = {
         $w = Predictable
         $plan = $null
         foreach ($letter in 'a', 'v', 'b', 'p', 'k', 's', 'e', 'o') {
-            $options = @()
-            foreach ($deadline in 400, 12) {
+            $options = @(); $predicted = @()
+            foreach ($deadline in 0, 400) {
                 $req = @{ op = 'suggest'; roman = $letter; context = @($w.Bangla); k = 5; deadline_ms = $deadline } | ConvertTo-Json -Compress
                 $r = Ask-Engine $req | ConvertFrom-Json
+                $predicted += @($r.next)
                 $shown = Merge-Predictions @($r.candidates) @($r.next)
-                if ($shown.Count -ge 3 -and @($r.next) -contains $shown[2]) { $options += $shown[2] }
+                if ($shown.Count -ge 4 -and @($r.next) -contains $shown[3]) { $options += $shown[3] }
             }
-            if ($options.Count) { $plan = @{ Letter = $letter; Words = $options }; break }
+            if ($options.Count) { $plan = @{ Letter = $letter; Predicted = @($predicted | Select-Object -Unique) }; break }
         }
         Expect-True "engine predicts after '$($w.Bangla)' + a letter" ([bool]$plan)
         if (-not $plan) { return }
-        Clear-Document; Send-Keys "$($w.Roman) $($plan.Letter)3"
+        Clear-Document; Send-Keys "$($w.Roman) $($plan.Letter)4"
         $got = (Text)
+        # Any of the engine's predictions: which one lands fourth depends on whether the keyboard
+        # was showing the fast answer or the full ranking, and the test cannot see which. What it
+        # checks is the placement -- that the fourth entry is a prediction and its number types it.
         $ok = $false
-        foreach ($p in $plan.Words) { if ($got -ceq "$($w.Bangla) $p") { $ok = $true } }
-        [void]$script:results.Add([pscustomobject]@{ Case = $script:current; Check = 'text'; Pass = $ok; Expected = (Show "$($w.Bangla) $($plan.Words[0])"); Got = (Show $got) })
+        foreach ($p in $plan.Predicted) { if ($got -ceq "$($w.Bangla) $p") { $ok = $true } }
+        [void]$script:results.Add([pscustomobject]@{ Case = $script:current; Check = 'a prediction typed'; Pass = $ok; Expected = (Show "$($w.Bangla) $($plan.Predicted -join '|')"); Got = (Show $got) })
     }
     # The caret moved without a key (a click): Tab must not drop the word somewhere else.
     predict_caret_moved = {
@@ -545,12 +622,17 @@ $cases = [ordered]@{
 $scratch = Join-Path $env:TEMP 'likhi-type-test.txt'
 [IO.File]::WriteAllText($scratch, '')
 $savedConfig = if (Test-Path $userConfig) { [IO.File]::ReadAllBytes($userConfig) } else { $null }
+$savedPersonal = @{}
 $before = [Ime]::Current()
 $script:notepad = [IntPtr]::Zero
 try {
     Set-UserSetting 'telemetry' '"off"'
     Set-UserSetting 'next_word' 'true'
+    # Off by default since 0.5.2 but still shipped behind the setting, so still tested.
+    Set-UserSetting 'next_word_after_space' 'true'
     Stop-Engine
+    # With the engine stopped, so the dictionary's files are complete and not being written.
+    foreach ($f in $personal) { $savedPersonal[$f] = if (Test-Path $f) { [IO.File]::ReadAllBytes($f) } else { $null } }
     Remove-Item $marker -ErrorAction SilentlyContinue
     Start-Engine
 
@@ -578,8 +660,15 @@ finally {
     }
     if ($savedConfig) { [IO.File]::WriteAllBytes($userConfig, $savedConfig) } else { Remove-Item $userConfig -ErrorAction SilentlyContinue }
     Remove-Item $marker -ErrorAction SilentlyContinue
-    # Restarted so the restored settings -- usage reporting above all -- take effect.
+    # Restarted so the restored settings -- usage reporting above all -- take effect, and stopped
+    # first so the personal dictionary can be put back while nothing has it open.
     Stop-Engine
+    if ($savedPersonal.Count) {
+        foreach ($f in $personal) {
+            if ($savedPersonal[$f]) { [IO.File]::WriteAllBytes($f, $savedPersonal[$f]) }
+            elseif (Test-Path $f) { [IO.File]::Delete($f) }
+        }
+    }
     try { Start-Engine } catch { Write-Warning "the engine did not come back: $_" }
 }
 $script:results | Format-Table Case, Check, Pass, Expected, Got -AutoSize -Wrap

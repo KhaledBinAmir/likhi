@@ -29,9 +29,14 @@ pub struct Config {
     /// Candidate window face. Empty means the built-in preference chain.
     pub font_name: String,
     pub font_size: f32,
-    /// After a word is committed with Space, offer the words likely to come next. Tab takes the
-    /// first; any other key dismisses them.
+    /// Predicted next words: once the next word is begun, words that usually follow the previous
+    /// one and fit the letters typed join the end of the list.
     pub next_word: bool,
+    /// Also guess the next word before any of it is typed, straight after Space, labelled Tab.
+    /// Off by default: with only the previous word to go on, the guess is right about one time in
+    /// four when it is shown at all, and Khaled judged that not worth a popup after every word.
+    /// Kept for when the guess can use the whole sentence.
+    pub next_word_after_space: bool,
     /// How sure the engine must be before a suggestion appears: the top continuation's share of
     /// everything seen after the previous word. 0.2 measured right 35% of the time in the top three,
     /// against 18% when always shown -- see `likhi-nextword`.
@@ -51,6 +56,7 @@ impl Default for Config {
             font_name: String::new(),
             font_size: 14.0,
             next_word: true,
+            next_word_after_space: false,
             next_word_min_share: 0.2,
         }
     }

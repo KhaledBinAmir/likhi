@@ -76,6 +76,8 @@ struct Theme {
     highlight: D2D1_COLOR_F,
     highlight_text: D2D1_COLOR_F,
     border: D2D1_COLOR_F,
+    /// Predicted next words, so they read as guesses rather than as spellings of what was typed.
+    predicted: D2D1_COLOR_F,
 }
 
 fn rgb(r: u8, g: u8, b: u8) -> D2D1_COLOR_F {
@@ -119,6 +121,7 @@ fn theme() -> Theme {
             highlight: rgb(16, 138, 95),
             highlight_text: rgb(255, 255, 255),
             border: rgb(64, 64, 70),
+            predicted: rgb(110, 205, 160),
         }
     } else {
         Theme {
@@ -128,6 +131,7 @@ fn theme() -> Theme {
             highlight: rgb(16, 138, 95),
             highlight_text: rgb(255, 255, 255),
             border: rgb(210, 210, 214),
+            predicted: rgb(12, 112, 78),
         }
     }
 }
@@ -142,6 +146,10 @@ pub struct Content {
     /// Tab, instead of a number: after a committed word the digit keys type Bengali digits, so a
     /// numbered entry would promise something pressing that number does not do.
     pub tab_hint: bool,
+    /// Where predicted next words begin, if any are in the list. They come last, after a divider
+    /// and in their own colour: the entries before are readings of what was typed, these are
+    /// guesses at the whole next word, and a glance should be enough to tell them apart.
+    pub predicted_from: Option<usize>,
 }
 
 /// One candidate's measurements, in DIPs. The number and the word are measured separately because
@@ -256,28 +264,28 @@ impl CandidateWindow {
     /// Replace the list and highlight, re-measure, and show the window just below `anchor`
     /// (the composition's rectangle in screen coordinates). Arms the refine timer.
     pub fn show(&self, candidates: &[String], cursor: usize, anchor: &RECT) {
-        self.show_with(candidates, cursor, anchor, false);
+        self.show_content(
+            Content { candidates: candidates.to_vec(), cursor, ..Default::default() },
+            anchor,
+        );
     }
 
-    /// show, choosing whether entries are numbered or labelled Tab (a next-word suggestion).
-    pub fn show_with(&self, candidates: &[String], cursor: usize, anchor: &RECT, tab_hint: bool) {
-        if candidates.is_empty() {
+    /// Show `content`: the list, its highlight, and how its entries are labelled and coloured.
+    pub fn show_content(&self, content: Content, anchor: &RECT) {
+        if content.candidates.is_empty() {
             self.hide();
             return;
         }
+        let items = content.candidates.len();
         let hwnd = self.inner.borrow().hwnd;
         let size = {
             let mut inner = self.inner.borrow_mut();
-            inner.content = Content {
-                candidates: candidates.to_vec(),
-                cursor,
-                tab_hint,
-            };
+            inner.content = content;
             inner.measure()
         };
         let Some((w, h)) = size else { return };
         let (x, y) = place(anchor, w, h);
-        vlog!("candidate window shown at {x},{y} size {w}x{h} ({} items)", candidates.len());
+        vlog!("candidate window shown at {x},{y} size {w}x{h} ({items} items)");
         unsafe {
             let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
             let _ = InvalidateRect(Some(hwnd), None, false);
@@ -535,7 +543,10 @@ impl Inner {
     fn refine(&mut self) {
         let Some(refiner) = self.refiner.as_ref() else { return };
         let Some(content) = refiner() else { return };
-        if content.candidates == self.content.candidates && content.cursor == self.content.cursor {
+        if content.candidates == self.content.candidates
+            && content.cursor == self.content.cursor
+            && content.predicted_from == self.content.predicted_from
+        {
             return;
         }
         self.content = content;
@@ -582,8 +593,10 @@ impl Inner {
                 target.CreateSolidColorBrush(&theme.number, None),
                 target.CreateSolidColorBrush(&theme.highlight, None),
                 target.CreateSolidColorBrush(&theme.highlight_text, None),
+                target.CreateSolidColorBrush(&theme.predicted, None),
             ];
-            let [Ok(border), Ok(text), Ok(number), Ok(highlight), Ok(highlight_text)] = brushes else {
+            let [Ok(border), Ok(text), Ok(number), Ok(highlight), Ok(highlight_text), Ok(predicted)] = brushes
+            else {
                 let _ = target.EndDraw(None, None);
                 return;
             };
@@ -598,6 +611,18 @@ impl Inner {
             let mut x = PAD_X;
             for (i, (word, cell)) in self.content.candidates.iter().zip(&cells).enumerate() {
                 let selected = i == self.content.cursor;
+                let is_predicted = self.content.predicted_from.is_some_and(|from| i >= from);
+                // The divider sits in the gap before the first prediction, so it costs no width.
+                if i > 0 && self.content.predicted_from == Some(i) {
+                    let mid = x - GAP / 2.0;
+                    target.DrawLine(
+                        Vector2 { X: mid, Y: PAD_Y },
+                        Vector2 { X: mid, Y: height_dip - PAD_Y },
+                        &border,
+                        1.0,
+                        None,
+                    );
+                }
                 if selected {
                     let pill = D2D1_ROUNDED_RECT {
                         rect: D2D_RECT_F {
@@ -612,7 +637,11 @@ impl Inner {
                     target.FillRoundedRectangle(&pill, &highlight);
                 }
                 let number_brush = if selected { &highlight_text } else { &number };
-                let word_brush = if selected { &highlight_text } else { &text };
+                let word_brush = match (selected, is_predicted) {
+                    (true, _) => &highlight_text,
+                    (false, true) => &predicted,
+                    (false, false) => &text,
+                };
                 draw_text(&target, &dwrite, &format, &number_label(&self.content, i), x, height_dip, number_brush);
                 draw_text(&target, &dwrite, &format, word, x + cell.number_width + NUMBER_GAP, height_dip, word_brush);
                 x += cell.width() + GAP;

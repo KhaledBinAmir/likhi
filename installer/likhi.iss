@@ -8,6 +8,20 @@
 ; rights once and leaves the user with a working Bangla keyboard and nothing to configure.
 
 #define AppName "Likhi"
+; 0.5.2: Tab ends a word the way Space and Enter do -- it commits the highlighted word, then does its
+;        own job, a tab or the next field. So do Delete, Home, End, Page Up and Down, Insert, the F
+;        keys and every Ctrl or Alt combination. Each of them used to reach the application with the
+;        word still open, and the application ended it as the Latin typed. A word the application
+;        ends by itself -- a click elsewhere, its own Send button, a change of keyboard -- is now
+;        committed as the highlighted word too, unless the application has already taken the text.
+;        Predicted next words move to the end of the list, after a divider and in green: readings of
+;        what was typed come first, guesses at the whole next word after them. Space still always
+;        takes the first reading, so someone typing without looking is never handed a guess.
+;        Measured on held-out chat: the same keystrokes saved as 0.5.1's placement, with the wanted
+;        word pushed down 8 times in 11,597 words instead of 29.
+;        The guess shown straight after Space is off. With only the previous word to go on it is
+;        right about one time in four when it appears at all, which is not worth a popup after every
+;        word. next_word_after_space in config.json turns it back on.
 ; 0.5.1: an icon beside the clock, as Avro and Bijoy have, and a way to exit. Left click opens the
 ;        Likhi window; right click offers Check for updates, Install update when one is waiting, and
 ;        Exit Likhi. Until now nothing short of Task Manager stopped it. Exit means exit: the keyboard
@@ -192,7 +206,7 @@
 ;        running engine with PowerShell rather than WMIC, which Windows 11 no longer ships.
 ; 0.1.1: the engine did not look for the shell's config.json in the installed layout, so a fresh
 ;        install never reported telemetry.
-#define AppVersion "0.5.1"
+#define AppVersion "0.5.2"
 #define AppPublisher "Khaled Bin Amir"
 #define AppURL "https://github.com/KhaledBinAmir/likhi"
 #define PimeSource "C:\Program Files (x86)\PIME"

@@ -556,8 +556,7 @@ namespace Likhi
                 "3.   Space or Enter accepts the highlighted word.",
                 "4.   Press 1–5 to pick a different one, or ← → to move.",
                 "5.   F12 switches to plain English without leaving Bangla mode.",
-                "6.   After Space, a likely next word may appear:  Tab  types it.",
-                "7.   Start the next word, and words that usually follow join the list."
+                "6.   Start the next word: likely words appear at the end of the list, in green."
             };
             foreach (string s in steps) { Body(s, 24, y, Fg, "Nirmala UI", 22); y += 24; }
             y += 14;
@@ -591,7 +590,7 @@ namespace Likhi
             Controls.Add(tryHere);
             y += 42;
 
-            nextWord = Check("Suggest the next word  (Tab after Space, and in the list as you type)", 18, y); y += 26;
+            nextWord = Check("Suggest likely next words as I type  (at the end of the list)", 18, y); y += 26;
             autostart = Check("Start Likhi when I sign in", 18, y); y += 26;
             reporting = Check("Share anonymous usage data to improve suggestions", 18, y); y += 24;
             Body("Counts only, plus words where the first suggestion was wrong. Never passwords,", 40, y, Dim, "Segoe UI", 18);

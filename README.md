@@ -24,9 +24,11 @@ experience to the Windows desktop, as open source.
   keys or arrows. Space or Enter commits the first.
 - Reasonable output for words it has never seen: names, slang, English loanwords in Bangla script.
 - Learns from you: keep picking the second suggestion and it becomes the first.
-- Suggests the next word after Space, when it is confident enough to be worth a glance; Tab types it
-  and any other key carries on as if it were not there. Once you start the next word, the words that
-  usually follow the last one and fit what you have typed join the suggestion list.
+- Predicts the next word as you start it: words that usually follow the last one and fit the letters
+  typed so far appear at the end of the suggestion list, in green. Space always takes the first
+  reading of what you actually typed, so a guess is never inserted unless you pick it.
+- Tab, Enter, Space, punctuation, Delete, Home, Ctrl combinations -- any key that ends a word commits
+  the highlighted suggestion first, then does its usual job.
 - An icon beside the clock: open Likhi, check for updates, or exit. Exiting lasts until Likhi is
   opened again or the next sign-in, and while it is exited the keyboard types plain English.
 - System-wide: Chrome, VS Code, WhatsApp, Word, Slack, Windows Terminal.

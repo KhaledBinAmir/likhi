@@ -392,7 +392,8 @@ pub fn handle_request(svc: &SuggestService, tel: &Telemetry, raw: &[u8]) -> Vec<
                         bottom: at(3),
                     };
                     let tab_hint = req.get("tab_hint").and_then(Value::as_bool).unwrap_or(false);
-                    let shown = crate::uihost::show(items, cursor, rect, tab_hint);
+                    let predicted_from = req.get("predicted_from").and_then(Value::as_u64).map(|n| n as usize);
+                    let shown = crate::uihost::show(items, cursor, rect, tab_hint, predicted_from);
                     json!({"ok": true, "shown": shown})
                 }
                 #[cfg(windows)]

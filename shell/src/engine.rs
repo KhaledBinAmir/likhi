@@ -610,13 +610,22 @@ impl Engine {
     /// that does not arrive, because the next keystroke is already replacing it.
     ///
     /// `tab_hint` labels the entry "Tab" instead of numbering it: a next-word suggestion.
-    pub fn ui_show(&mut self, items: &[String], cursor: usize, rect: (i32, i32, i32, i32), tab_hint: bool) {
+    /// `predicted_from` is where predicted next words begin, drawn apart from the rest.
+    pub fn ui_show(
+        &mut self,
+        items: &[String],
+        cursor: usize,
+        rect: (i32, i32, i32, i32),
+        tab_hint: bool,
+        predicted_from: Option<usize>,
+    ) {
         let request = serde_json::json!({
             "op": "ui_show",
             "items": items,
             "cursor": cursor,
             "rect": [rect.0, rect.1, rect.2, rect.3],
             "tab_hint": tab_hint,
+            "predicted_from": predicted_from,
         })
         .to_string();
         if let Err(e) = self.call(&request, read_timeout_for(TYPE_DEADLINE_MS)) {

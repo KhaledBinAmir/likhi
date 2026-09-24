@@ -261,12 +261,14 @@ fn letters(csv_path: &Path, max_letters: usize) {
 
     const K: usize = 5;
     // (label, insert at, how many)
-    let rules: [(&str, usize, usize); 5] = [
+    let rules: [(&str, usize, usize); 7] = [
         ("today (no prediction)", 0, 0),
         ("after 1st, up to 1", 1, 1),
         ("after 1st, up to 2", 1, 2),
         ("after 2nd, up to 1", 2, 1),
         ("after 2nd, up to 2", 2, 2),
+        ("after 3rd, up to 1", 3, 1),
+        ("after 3rd, up to 2", 3, 2),
     ];
     // Per rule: [letters][position] -> count; keystrokes needed; displaced at full length.
     let mut found = vec![vec![vec![0usize; K + 1]; max_letters + 1]; rules.len()];
