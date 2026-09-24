@@ -196,6 +196,10 @@ release that carries a signed manifest is offered to all of them. So a release i
 when it is meant for everyone, and a test build is never uploaded with a manifest.
 
 ```
+# 0. test the installed build for real: types into Notepad through the actual keyboard for about
+#    four minutes -- leave the machine alone -- and restores everything it touched afterwards
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/type_test.ps1
+
 # 1. the one place the version number is written
 #    installer/likhi.iss:   #define AppVersion "x.y.z"      (and a changelog entry above it)
 
