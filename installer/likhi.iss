@@ -8,6 +8,12 @@
 ; rights once and leaves the user with a working Bangla keyboard and nothing to configure.
 
 #define AppName "Likhi"
+; 0.4.2: keystroke latency is measured on real machines for the first time. The engine has always
+;        read a latency figure from every commit and aggregated it into the pilot's percentiles,
+;        and the text service never sent one, so those columns read 0.0 on every install for the
+;        whole pilot -- which looked like a measurement and was not. What is timed now is the span
+;        the host application is blocked inside OnKeyDown, the whole cost of a keystroke measured
+;        where the typist pays it. The slowest keystroke of each word travels with its commit.
 ; 0.4.1: the engine no longer puts a console window on the desktop at sign-in. It starts from the
 ;        Run key, and as a console application Windows gave it a terminal titled with the install
 ;        path, on every machine, at every boot. It is a windows-subsystem binary now and borrows the
@@ -146,7 +152,7 @@
 ;        running engine with PowerShell rather than WMIC, which Windows 11 no longer ships.
 ; 0.1.1: the engine did not look for the shell's config.json in the installed layout, so a fresh
 ;        install never reported telemetry.
-#define AppVersion "0.4.1"
+#define AppVersion "0.4.2"
 #define AppPublisher "Khaled Bin Amir"
 #define AppURL "https://github.com/KhaledBinAmir/likhi"
 #define PimeSource "C:\Program Files (x86)\PIME"
