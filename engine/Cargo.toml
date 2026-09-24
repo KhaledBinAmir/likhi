@@ -45,6 +45,13 @@ name = "likhi-nextword"
 path = "src/bin/nextword.rs"
 required-features = ["tools"]
 
+# The only program that touches the update signing key: generates it, signs release manifests,
+# and verifies them against the keys the engine trusts.
+[[bin]]
+name = "likhi-sign"
+path = "src/bin/sign.rs"
+required-features = ["tools"]
+
 # The telemetry operator tool. Behind `tools` like the rest and so absent from the installer, which
 # matches what shipped before: the Python `likhi-report` was always run from a checkout. It needs no
 # extra dependencies -- WinHTTP and serde_json are already here for the engine itself.
@@ -54,7 +61,7 @@ path = "src/bin/report.rs"
 required-features = ["tools"]
 
 [features]
-tools = ["dep:flate2", "dep:csv"]
+tools = ["dep:flate2", "dep:csv", "ed25519-compact/random"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -72,6 +79,10 @@ unicode-normalization = "0.1"
 # tools should not need a C toolchain beyond what the rest of the crate already does.
 flate2 = { version = "1", optional = true, default-features = false, features = ["rust_backend"] }
 csv = { version = "1", optional = true }
+# Verifying update signatures. Small, pure Rust, and it carries its own SHA-512, so hashing the
+# installer needs nothing else. Verification only by default: generating a key needs randomness,
+# which only the signing tool does, so that comes in with the `tools` feature.
+ed25519-compact = { version = "2.4.2", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
@@ -91,6 +102,9 @@ windows = { version = "0.62", features = [
     # The candidate window drawn for sandboxed applications: its own thread, its own message loop.
     "Win32_System_LibraryLoader",
     "Win32_UI_WindowsAndMessaging",
+    # Offering an update: the notification area icon, and running the verified installer with the
+    # permission prompt a machine-wide install needs.
+    "Win32_UI_Shell",
     # Borrowing the parent's console when there is one. The server is a windows-subsystem binary so
     # that starting at sign-in does not put a terminal on the desktop, and this is what keeps it
     # printing normally when someone runs it by hand.

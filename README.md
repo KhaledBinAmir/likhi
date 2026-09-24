@@ -83,6 +83,15 @@ The reason it defaults to on: this is a pilot, and the struggle words are the on
 which words the engine gets wrong. They become the test set every later change is measured against.
 That is a real trade against your privacy, which is why it is written out here rather than buried.
 
+**Update checks.** Once a day Likhi asks GitHub whether a newer release exists. That request carries
+nothing about you or what you type, but like any request it tells GitHub that a computer at your
+address runs Likhi. It is a separate setting from usage reporting, **"Check for updates once a day"**
+in the Likhi window, so switching one off never leaves the other on by accident.
+
+An update is only offered after two checks: the release is signed by a key that never leaves the
+publisher's machine, and the installer matches exactly what that signature describes. Anything else
+is refused. Nothing installs until you click the notification, and Windows asks for permission.
+
 ## Repository layout
 
 ```

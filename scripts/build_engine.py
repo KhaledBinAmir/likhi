@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -53,6 +54,20 @@ def sizeof(path: Path) -> str:
     return f"{total / 1e6:.1f} MB"
 
 
+def product_version() -> str:
+    """The version in the installer script, which is the one place a release's number is written.
+
+    The engine compares it against the newest signed release to decide whether to offer an update,
+    so it has to be the same number the installer and the release carry. Reading it from here keeps
+    it that way without anyone having to remember to change it twice.
+    """
+    iss = (REPO / "installer" / "likhi.iss").read_text(encoding="utf-8")
+    m = re.search(r'^#define AppVersion "([0-9]+\.[0-9]+\.[0-9]+)"', iss, re.MULTILINE)
+    if not m:
+        raise SystemExit("no '#define AppVersion \"x.y.z\"' in installer/likhi.iss")
+    return m.group(1)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", type=Path, default=REPO / "dist" / "engine")
@@ -61,10 +76,15 @@ def main() -> None:
     args = ap.parse_args()
 
     if not args.skip_build:
-        log(f"cargo build --release --target {TARGET}")
+        version = product_version()
+        log(f"cargo build --release --target {TARGET}  (version {version})")
+        # A build made here is a release build and knows its version, which switches the updater
+        # on. A plain `cargo build` has no version and leaves it off, so a development engine never
+        # offers to replace itself with an older published one.
         result = subprocess.run(
             [cargo(), "build", "--release", "--target", TARGET],
             cwd=CRATE,
+            env={**os.environ, "LIKHI_VERSION": version},
         )
         if result.returncode != 0:
             raise SystemExit("cargo build failed")

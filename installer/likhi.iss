@@ -8,6 +8,22 @@
 ; rights once and leaves the user with a working Bangla keyboard and nothing to configure.
 
 #define AppName "Likhi"
+; 0.5.0: Likhi updates itself. Once a day the engine looks for a newer release, downloads it, and
+;        checks two things before offering it: that the release's manifest is signed by a key that
+;        has never left the publisher's machine, and that the installer matches the size and hash
+;        that manifest names. Anything else -- an unknown key, one changed byte, an older version --
+;        is refused and nothing is offered. A verified update appears as a notification; clicking it
+;        runs the installer and Windows asks for permission. Nothing installs behind anyone's back,
+;        and the installer is verified a second time immediately before it runs. The check can be
+;        turned off in the Likhi window, separately from usage reporting.
+;        Upgrades no longer need a restart. The text service is loaded into every application, so
+;        until now a new one was scheduled to replace the old at the next boot, and a fix reached
+;        nobody until they rebooted. The loaded DLL is now renamed aside, which Windows allows, and
+;        the new one written in its place: applications opened afterwards get it immediately. Any
+;        replacement an earlier installer left waiting for a reboot is cancelled first -- otherwise
+;        that restart would have quietly put the old text service back over the new one, which is
+;        exactly what a machine that had upgraded once without rebooting was set up to do.
+;        Includes 0.4.2's latency measurement, which had not yet reached testers.
 ; 0.4.2: keystroke latency is measured on real machines for the first time. The engine has always
 ;        read a latency figure from every commit and aggregated it into the pilot's percentiles,
 ;        and the text service never sent one, so those columns read 0.0 on every install for the
@@ -152,7 +168,7 @@
 ;        running engine with PowerShell rather than WMIC, which Windows 11 no longer ships.
 ; 0.1.1: the engine did not look for the shell's config.json in the installed layout, so a fresh
 ;        install never reported telemetry.
-#define AppVersion "0.4.2"
+#define AppVersion "0.5.0"
 #define AppPublisher "Khaled Bin Amir"
 #define AppURL "https://github.com/KhaledBinAmir/likhi"
 #define PimeSource "C:\Program Files (x86)\PIME"
@@ -186,10 +202,11 @@ UninstallDisplayName={#AppName} (Bangla phonetic keyboard)
 WizardStyle=modern
 LicenseFile=..\LICENSE
 DisableProgramGroupPage=yes
-; Our own processes are stopped in [Code]; the text service DLL is loaded inside every application
+; Our own processes are stopped in [Code]. The text service DLL is loaded inside every application
 ; that has had focus, and Restart Manager would offer to close the user's browser and editor to
-; replace it. Scheduling a replacement at the next restart is far less disruptive, and the DLL is
-; unchanged between Likhi releases anyway.
+; replace it. Instead [Code] renames the loaded DLL aside, which Windows allows for a mapped image,
+; and the new one is written under the original name: applications already running keep the copy
+; they have, and everything that loads the keyboard from then on gets the new one. No restart.
 CloseApplications=no
 SetupLogging=yes
 
@@ -203,10 +220,11 @@ Source: "..\dist\engine\*"; DestDir: "{app}\engine"; Flags: ignoreversion recurs
 ; The text service. One DLL per architecture, because it is loaded into whichever process has
 ; keyboard focus and a 32-bit application cannot load the 64-bit one.
 ;
-; No ignoreversion: these live inside every running application that has had focus. Forcing an
-; overwrite locks the file, Inno schedules the replacement for the next boot, and Setup then asks
-; for a restart on every upgrade. Inno's version check skips them when they already match.
-; restartreplace remains as the fallback when a genuinely newer build cannot be written.
+; These live inside every running application that has had focus, so they cannot be overwritten in
+; place. [Code] renames the loaded copy aside before this section runs, so the destination is free
+; and the new DLL is written immediately. restartreplace remains only as the fallback for the case
+; where that rename fails; it schedules the replacement for the next boot, which is how every
+; upgrade worked until 0.5.0 -- and why a text service fix used to reach nobody until they rebooted.
 Source: "..\dist\shell\x64\LikhiTextService.dll"; DestDir: "{app}\shell\x64"; Flags: restartreplace uninsrestartdelete
 Source: "..\dist\shell\x64\likhi.ico"; DestDir: "{app}\shell\x64"; Flags: ignoreversion
 Source: "..\dist\shell\x86\LikhiTextService.dll"; DestDir: "{app}\shell\x86"; Flags: restartreplace uninsrestartdelete
@@ -250,6 +268,12 @@ Type: filesandordirs; Name: "{app}\pime"
 ; with it; the directory itself is left alone, because a machine may have installed PIME for its own
 ; reasons and Inno removes a directory only once it is empty.
 Type: filesandordirs; Name: "{#PimeDir}\python\input_methods\likhi"
+
+[UninstallDelete]
+; Earlier text service DLLs, renamed aside by upgrades while applications still had them loaded.
+; Whatever is still in use when Likhi is uninstalled stays until the applications holding it close.
+Type: files; Name: "{app}\shell\x64\LikhiTextService.dll.old-*"
+Type: files; Name: "{app}\shell\x86\LikhiTextService.dll.old-*"
 
 [Icons]
 ; First, and named just "Likhi", because that is what someone types into the Start menu when they
@@ -335,6 +359,75 @@ begin
     machine upgrading from an older version has one running and it holds the port. }
   RunHidden(ExpandConstant('{sys}\taskkill.exe'), '/f /im likhi-server.exe', Code);
   Sleep(900);
+end;
+
+{ Delete the files in Dir that match Pattern, where they are not in use. A file that is still mapped
+  into a running application refuses, and that is what we want: it is skipped and tried again next
+  time. Returns how many were removed. }
+function DeleteMatching(const Dir, Pattern: String): Integer;
+var
+  Rec: TFindRec;
+begin
+  Result := 0;
+  if FindFirst(AddBackslash(Dir) + Pattern, Rec) then
+  begin
+    try
+      repeat
+        if (Rec.Attributes and FILE_ATTRIBUTE_DIRECTORY) = 0 then
+          if DeleteFile(AddBackslash(Dir) + Rec.Name) then
+            Result := Result + 1;
+      until not FindNext(Rec);
+    finally
+      FindClose(Rec);
+    end;
+  end;
+end;
+
+{ Make room for the new text service without a restart.
+
+  Three things, in this order, for each architecture.
+
+  First, cancel any replacement an earlier installer scheduled for the next boot. Up to 0.4.2 a DLL
+  that was in use was written to a temporary file, and Windows was told to move that file over the
+  real DLL at the next restart. On a machine that has not restarted since, that instruction is still
+  waiting -- and if it survived this install, the next restart would quietly put the OLD text
+  service back over the new one. Found on the development machine, not reasoned about. The waiting
+  instruction points at the temporary file, so deleting the file is enough to disarm it.
+
+  Second, remove copies earlier upgrades renamed aside that nothing has loaded any more.
+
+  Third, rename the DLL that is loaded now. Windows allows renaming a mapped image; applications
+  already running keep the copy they have, and the new file can then be written under the original
+  name straight away. }
+procedure ReplaceTextServiceInPlace();
+var
+  Arch, Dir, Dll, Stamp: String;
+  I, Cancelled: Integer;
+begin
+  Stamp := GetDateTimeString('yyyymmddhhnnss', #0, #0);
+  for I := 0 to 1 do
+  begin
+    if I = 0 then
+      Arch := 'x64'
+    else
+      Arch := 'x86';
+    Dir := ExpandConstant('{app}\shell\') + Arch;
+    if DirExists(Dir) then
+    begin
+      Cancelled := DeleteMatching(Dir, 'is-*.tmp');
+      if Cancelled > 0 then
+        Log('cancelled ' + IntToStr(Cancelled) + ' replacement(s) an earlier install had left for the next restart in ' + Dir);
+      DeleteMatching(Dir, 'LikhiTextService.dll.old-*');
+      Dll := Dir + '\LikhiTextService.dll';
+      if FileExists(Dll) then
+      begin
+        if RenameFile(Dll, Dll + '.old-' + Stamp) then
+          Log('moved the loaded text service aside: ' + Dll)
+        else
+          Log('could not move ' + Dll + ' aside; it will be replaced at the next restart instead');
+      end;
+    end;
+  end;
 end;
 
 { Remove the embedded Python engine an older version installed.
@@ -455,6 +548,7 @@ begin
   if CurStep = ssInstall then
   begin
     StopOurProcesses();
+    ReplaceTextServiceInPlace();
     RemoveOldTextService();
     RemoveOldPythonRuntime();
     { Releases the CLSID from the 0.1.4-and-earlier location before that copy is deleted, so the

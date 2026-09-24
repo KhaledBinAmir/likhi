@@ -22,7 +22,11 @@ use serde_json::{json, Value};
 use crate::core::Engine;
 use crate::telemetry::{Mode, Telemetry};
 
-pub const VERSION: &str = "0.0.1";
+/// What `ping` reports: the product version this build was made as, or "dev".
+pub const VERSION: &str = match crate::update::PRODUCT_VERSION {
+    Some(v) => v,
+    None => "dev",
+};
 pub const DEFAULT_PORT: u16 = 47123;
 pub const DEFAULT_DEADLINE_MS: f64 = 12.0;
 

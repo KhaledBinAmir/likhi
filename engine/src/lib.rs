@@ -32,6 +32,11 @@ pub mod telemetry;
 /// The candidate window drawn on behalf of a sandboxed application, which cannot show one itself.
 #[cfg(windows)]
 pub mod uihost;
+/// Signed self-update: manifest verification, version comparison, and the daily check.
+pub mod update;
+/// Offering a verified update to the person: a notification they click to install.
+#[cfg(windows)]
+pub mod notify;
 pub mod romankey;
 pub mod tensor;
 pub mod textnorm;

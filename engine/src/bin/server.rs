@@ -273,6 +273,15 @@ fn main() {
     // Off the startup path too, so this does not delay the engine answering.
     likhi_engine::uihost::prewarm();
 
+    // The daily update check. It sleeps ten minutes or more before its first look, so it never
+    // competes with sign-in, and does nothing at all in a development build.
+    log(&format!(
+        "version {}",
+        likhi_engine::update::PRODUCT_VERSION.unwrap_or("dev (updates off)")
+    ));
+    likhi_engine::notify::set_log(log);
+    likhi_engine::update::spawn(log, likhi_engine::notify::offer);
+
     let cfg = TelemetryConfig::discover();
     let mode = cfg.mode;
     let sync_seconds = cfg.sync_seconds;

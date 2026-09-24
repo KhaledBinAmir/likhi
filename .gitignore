@@ -49,3 +49,8 @@ engine/target/
 # Reviewed by hand, then appended to data/feedback/words.jsonl. Until then it holds real
 # testers' typed words and does not belong in the repository.
 pilot-words*.jsonl
+
+# The update signing key. It lives in %USERPROFILE%\.likhi and must never be committed: anyone who
+# holds it can publish an update every Likhi installation will accept. Ignored here as a backstop.
+*.key
+update-signing*

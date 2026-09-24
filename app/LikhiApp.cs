@@ -256,6 +256,22 @@ namespace Likhi
             SetSetting("telemetry", "\"" + (on ? "full" : "off") + "\"");
         }
 
+        // Its own setting, not part of usage reporting. A daily update check sends nothing about what
+        // anyone types, but it does tell GitHub that a machine at this address runs Likhi, so it must
+        // be possible to turn off on its own -- and turning reporting off must not quietly leave it on.
+        // On unless someone has said otherwise, which is what the engine assumes too.
+        public static bool UpdatesOn()
+        {
+            return Setting("check_updates", "true") != "false";
+        }
+
+        public static void SetUpdates(bool on)
+        {
+            // A bare JSON boolean: the engine reads this with as_bool, and a quoted "true" would read
+            // as absent and fall back to on, so switching it off would silently do nothing.
+            SetSetting("check_updates", on ? "true" : "false");
+        }
+
         /// <summary>Installed families that actually contain Bengali, so the list cannot offer a
         /// font that would render every candidate as boxes.</summary>
         public static List<string> BanglaFonts()
@@ -355,7 +371,7 @@ namespace Likhi
     {
         readonly bool dark = IsDarkTheme();
         Label statusKeyboard, statusEngine;
-        CheckBox autostart, reporting;
+        CheckBox autostart, reporting, updates;
         TextBox tryHere;
         ComboBox fontBox, sizeBox;
         // Set while the window writes its own controls. Without it, showing the current state fires
@@ -395,7 +411,7 @@ namespace Likhi
             Text = "Likhi";
             // 628 rather than 600: the extra 28 is the credit line under the buttons. The layout
             // below is a hand-laid grid with no auto-sizing, so height is changed here or nowhere.
-            ClientSize = new Size(520, 628);
+            ClientSize = new Size(520, 695);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
@@ -458,6 +474,12 @@ namespace Likhi
             Body("Counts only, plus words where the first suggestion was wrong. Never passwords,", 40, y, Dim, "Segoe UI", 18);
             y += 17;
             Body("numbers, or anything typed into a password box.", 40, y, Dim, "Segoe UI", 18);
+            y += 26;
+            updates = Check("Check for updates once a day", 18, y); y += 24;
+            // Two lines, like the reporting note above: one would be clipped at this width.
+            Body("Tells GitHub this computer runs Likhi. Every update is signed,", 40, y, Dim, "Segoe UI", 18);
+            y += 17;
+            Body("and nothing installs until you click it.", 40, y, Dim, "Segoe UI", 18);
             y += 30;
 
             Button diag = Btn("Run diagnostics", 18, y, 150);
@@ -483,6 +505,13 @@ namespace Likhi
                 if (loading) return;
                 Env.SetReporting(reporting.Checked);
                 Env.RestartEngine();
+            };
+            // No restart: the engine reads this setting before every check, so the change takes
+            // effect by the next one without interrupting anyone's typing.
+            updates.CheckedChanged += delegate
+            {
+                if (loading) return;
+                Env.SetUpdates(updates.Checked);
             };
             // The text service notices the file changing and rebuilds its text format within a
             // second, so there is nothing to restart and no need to switch keyboards.
@@ -533,6 +562,7 @@ namespace Likhi
 
             autostart.Checked = Env.AutostartOn();
             reporting.Checked = Env.ReportingOn();
+            updates.Checked = Env.UpdatesOn();
 
             string family = Env.Setting("font_name", "");
             if (family.Length == 0 || !fontBox.Items.Contains(family))
