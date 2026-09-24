@@ -393,6 +393,7 @@ fn cmd_collect(drop: &str, min_installs: usize, limit: usize, out: Option<&str>)
     );
 
     let (mut total_words, mut total_top1) = (0.0f64, 0.0f64);
+    let (mut next_shown, mut next_taken, mut predicted_taken) = (0.0f64, 0.0f64, 0.0f64);
     // A ranking miss: (roman, chose) -> installs that saw it, and what we wrongly ranked first.
     let mut miss_installs: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
     let mut word_wrong: BTreeMap<(String, String), BTreeMap<String, usize>> = BTreeMap::new();
@@ -431,6 +432,9 @@ fn cmd_collect(drop: &str, min_installs: usize, limit: usize, out: Option<&str>)
         };
         total_words += words;
         total_top1 += top1;
+        next_shown += metrics.iter().map(|r| num(r, "next_shown")).sum::<f64>();
+        next_taken += metrics.iter().map(|r| num(r, "next_taken")).sum::<f64>();
+        predicted_taken += metrics.iter().map(|r| num(r, "predicted_taken")).sum::<f64>();
         let (before_misses, before_friction) = (misses, friction);
         for e in &events {
             let (roman, chose) = (text(e, "roman").to_string(), text(e, "chose").to_string());
@@ -477,6 +481,25 @@ fn cmd_collect(drop: &str, min_installs: usize, limit: usize, out: Option<&str>)
         total_words as i64,
         pct(total_top1, total_words)
     );
+    // From 0.5.1. Whether the next-word suggestion earns its place is this ratio: offline it was
+    // right about a quarter of the times it appeared, and people take fewer than they could.
+    if next_shown > 0.0 {
+        println!(
+            "next-word suggestions: shown {}, taken with Tab {} ({:.1}%)",
+            next_shown as i64,
+            next_taken as i64,
+            pct(next_taken, next_shown)
+        );
+    }
+    // First-letter prediction puts words into the ordinary list; this is how many of the words
+    // committed were ones it put there. Offline the best case was about a 1.2-point keystroke saving.
+    if predicted_taken > 0.0 {
+        println!(
+            "first-letter predictions taken: {} ({:.2}% of words)",
+            predicted_taken as i64,
+            pct(predicted_taken, total_words)
+        );
+    }
 
     // What the two kinds of event add up to, so the next section is not read as the whole story.
     println!(

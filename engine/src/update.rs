@@ -360,11 +360,84 @@ fn now() -> u64 {
 
 const DAY: u64 = 24 * 60 * 60;
 
+/// Held for the whole of a check, by the daily loop and by "check now" alike. Two checks at once
+/// would download the same installer into the same temporary file.
+static CHECKING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// Set by `spawn`, so a manual check can offer what it finds the same way the daily one does.
+static OFFER: std::sync::OnceLock<fn(&Ready) -> bool> = std::sync::OnceLock::new();
+static LOG: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
+
+/// What a manual check found, in a form the Likhi window can show.
+#[derive(Debug, serde::Serialize)]
+pub struct CheckResult {
+    pub ok: bool,
+    /// "up_to_date", "available", "failed" or "dev".
+    pub status: &'static str,
+    pub current: String,
+    pub version: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Check right now, because someone asked.
+///
+/// Ignores the once-a-day schedule and the "check for updates" setting: clicking "check now" is an
+/// explicit request, and a setting meant to stop the engine asking GitHub by itself should not stop
+/// a person from asking. Everything else is the daily check exactly: the same signature, the same
+/// hash, the same offer.
+pub fn check_now() -> CheckResult {
+    let Some(current) = PRODUCT_VERSION else {
+        return CheckResult {
+            ok: true,
+            status: "dev",
+            current: "dev".into(),
+            version: None,
+            error: Some("a development build does not update".into()),
+        };
+    };
+    let _held = CHECKING.lock().unwrap_or_else(|e| e.into_inner());
+    let result = check_once(current, &download_dir());
+    let mut state = load_state();
+    state.last_check = now();
+    let out = match result {
+        Ok(Some(ready)) => {
+            let shown = OFFER.get().is_some_and(|offer| offer(&ready));
+            if shown {
+                state.notified_version = ready.manifest.version.clone();
+                state.notified_at = now();
+            }
+            CheckResult {
+                ok: true,
+                status: "available",
+                current: current.into(),
+                version: Some(ready.manifest.version),
+                error: None,
+            }
+        }
+        Ok(None) => CheckResult {
+            ok: true,
+            status: "up_to_date",
+            current: current.into(),
+            version: None,
+            error: None,
+        },
+        Err(e) => {
+            if let Some(log) = LOG.get() {
+                log(&format!("updates: manual check failed ({e})"));
+            }
+            CheckResult { ok: false, status: "failed", current: current.into(), version: None, error: Some(e) }
+        }
+    };
+    save_state(&state);
+    out
+}
+
 /// Start the daily check on a thread of its own. Does nothing in a development build.
 ///
 /// `offer` puts a verified update in front of the person and returns whether it was shown. It is a
 /// parameter rather than a direct call so this module has no opinion about how that looks.
 pub fn spawn(log: fn(&str), offer: fn(&Ready) -> bool) {
+    let _ = OFFER.set(offer);
+    let _ = LOG.set(log);
     let Some(current) = PRODUCT_VERSION else {
         log("updates: development build, not checking");
         return;
@@ -388,7 +461,10 @@ fn run(current: &'static str, log: fn(&str), offer: fn(&Ready) -> bool) {
         if enabled() {
             let mut state = load_state();
             if now().saturating_sub(state.last_check) >= DAY || ready.is_none() && state.last_check == 0 {
-                match check_once(current, &dir) {
+                let held = CHECKING.lock().unwrap_or_else(|e| e.into_inner());
+                let checked = check_once(current, &dir);
+                drop(held);
+                match checked {
                     Ok(Some(r)) => {
                         log(&format!("updates: {} is available and verified ({})", r.manifest.version, r.path.display()));
                         ready = Some(r);

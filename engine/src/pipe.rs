@@ -35,8 +35,8 @@ use windows::Win32::Storage::FileSystem::{
     FlushFileBuffers, ReadFile, WriteFile, PIPE_ACCESS_DUPLEX,
 };
 use windows::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE,
-    PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, WaitNamedPipeW, PIPE_READMODE_BYTE,
+    PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
 use windows::Win32::System::Threading::GetCurrentProcessId;
@@ -81,6 +81,22 @@ pub fn session_id() -> u32 {
 
 pub fn pipe_name() -> String {
     format!(r"\\.\pipe\likhi-engine-s{}", session_id())
+}
+
+/// Whether an engine is already serving this session's pipe.
+///
+/// Asked without connecting, so the running engine never sees a client arrive and leave:
+/// `WaitNamedPipeW` answers from the pipe's existence, and a pipe whose instances are all busy
+/// still exists. This replaced a ping over the socket, which on Windows cost a full second at every
+/// start -- a connection to a port nobody listens on is retried rather than refused, measured at
+/// 2 s, and the ping's 1 s timeout was always what ended it.
+pub fn engine_present() -> bool {
+    const ERROR_SEM_TIMEOUT: u32 = 121;
+    let name = wide(&pipe_name());
+    if unsafe { WaitNamedPipeW(PCWSTR(name.as_ptr()), 1) }.as_bool() {
+        return true;
+    }
+    unsafe { GetLastError() }.0 == ERROR_SEM_TIMEOUT
 }
 
 /// Accept connections until `stop` is set, answering each line with `handle`.

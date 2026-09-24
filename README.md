@@ -24,6 +24,11 @@ experience to the Windows desktop, as open source.
   keys or arrows. Space or Enter commits the first.
 - Reasonable output for words it has never seen: names, slang, English loanwords in Bangla script.
 - Learns from you: keep picking the second suggestion and it becomes the first.
+- Suggests the next word after Space, when it is confident enough to be worth a glance; Tab types it
+  and any other key carries on as if it were not there. Once you start the next word, the words that
+  usually follow the last one and fit what you have typed join the suggestion list.
+- An icon beside the clock: open Likhi, check for updates, or exit. Exiting lasts until Likhi is
+  opened again or the next sign-in, and while it is exited the keyboard types plain English.
 - System-wide: Chrome, VS Code, WhatsApp, Word, Slack, Windows Terminal.
 - Imperceptible latency; everything runs locally on a normal laptop CPU.
 - Quick Bangla/English toggle, English passthrough for words you clearly mean as English.
@@ -62,7 +67,9 @@ from your choices. The personal model is a SQLite database in `%LOCALAPPDATA%\Li
 releases here, and sends two things to a collection endpoint:
 
 - *Counters.* How many words were committed, how often the first suggestion was the one taken, which
-  position was chosen, how long suggestions took, and the name of the application. No text at all.
+  position was chosen, how long suggestions took, how often a next-word suggestion was shown and how
+  often it was taken, how often a predicted word was the one taken, and the name of the application.
+  No text at all.
 - *Struggle words.* **Only when the first suggestion was wrong**: the roman string you typed, the
   word you picked instead, and the word Likhi wrongly put first. A word accepted first time is never
   recorded, because it teaches us nothing.

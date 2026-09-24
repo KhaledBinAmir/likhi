@@ -175,26 +175,6 @@ fn data_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("models/rust"))
 }
 
-/// True when a Likhi engine is already answering on this port.
-fn already_running(port: u16) -> bool {
-    let Ok(mut s) = TcpStream::connect_timeout(
-        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
-        Duration::from_secs(1),
-    ) else {
-        return false;
-    };
-    let _ = s.set_read_timeout(Some(Duration::from_secs(1)));
-    if s.write_all(b"{\"op\":\"ping\"}\n").is_err() {
-        return false;
-    }
-    let mut buf = [0u8; 256];
-    use std::io::Read;
-    match s.read(&mut buf) {
-        Ok(n) => String::from_utf8_lossy(&buf[..n]).contains("\"ok\""),
-        Err(_) => false,
-    }
-}
-
 fn serve_socket(stream: TcpStream, svc: Arc<SuggestService>, tel: Arc<Telemetry>) {
     let _ = stream.set_nodelay(true);
     let Ok(write_half) = stream.try_clone() else { return };
@@ -229,10 +209,28 @@ fn main() {
         }
     }
 
-    if already_running(port) {
-        log(&format!("an engine is already listening on 127.0.0.1:{port}; nothing to do"));
+    #[cfg(windows)]
+    if likhi_engine::pipe::engine_present() {
+        log(&format!("an engine is already serving {}; nothing to do", likhi_engine::pipe::pipe_name()));
         return;
     }
+
+    // Bound before anything is loaded, because holding the port is what makes this the only engine.
+    // Deliberately no SO_REUSEADDR: on Windows it lets a second process bind a port another is
+    // already listening on, so two engines would silently split the keyboard's requests between
+    // them, each with a different personal dictionary. Binding must fail instead.
+    //
+    // It used to be bound last. Then an engine started while another was still loading -- the Run
+    // key at sign-in and the keyboard's own restart, a few hundred milliseconds apart -- loaded the
+    // whole model and put up a second tray icon before finding out it was not needed. Connections
+    // that arrive before loading finishes wait in the backlog and are answered once it does.
+    let listener = match TcpListener::bind(("127.0.0.1", port)) {
+        Ok(l) => l,
+        Err(e) => {
+            log(&format!("cannot listen on 127.0.0.1:{port} ({e}); another engine is probably starting"));
+            return;
+        }
+    };
 
     let started = Instant::now();
     let dir = data_dir();
@@ -280,6 +278,9 @@ fn main() {
         likhi_engine::update::PRODUCT_VERSION.unwrap_or("dev (updates off)")
     ));
     likhi_engine::notify::set_log(log);
+    // The icon beside the clock: open Likhi, check for updates, exit. Also clears the marker a
+    // previous "Exit Likhi" left, because starting the engine is how someone undoes an exit.
+    likhi_engine::notify::start(log);
     likhi_engine::update::spawn(log, likhi_engine::notify::offer);
 
     let cfg = TelemetryConfig::discover();
@@ -296,6 +297,10 @@ fn main() {
         if parts.is_empty() { "local only".to_string() } else { parts.join(", ") }
     };
     let telemetry = Arc::new(Telemetry::new(cfg));
+    {
+        let telemetry = Arc::clone(&telemetry);
+        likhi_engine::notify::before_exit(move || telemetry.flush_local());
+    }
     if mode != Mode::Off {
         log(&format!(
             "telemetry: {} (files in {}; ships to {})",
@@ -348,16 +353,6 @@ fn main() {
         }
     }
 
-    // Deliberately no SO_REUSEADDR: on Windows it lets a second process bind a port another is
-    // already listening on, so two engines would silently split the keyboard's requests between
-    // them, each with a different personal dictionary. Binding must fail instead.
-    let listener = match TcpListener::bind(("127.0.0.1", port)) {
-        Ok(l) => l,
-        Err(e) => {
-            log(&format!("cannot listen on 127.0.0.1:{port}: {e}"));
-            return;
-        }
-    };
     log(&format!("listening on 127.0.0.1:{port}"));
 
     for stream in listener.incoming() {

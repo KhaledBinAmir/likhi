@@ -138,6 +138,10 @@ fn theme() -> Theme {
 pub struct Content {
     pub candidates: Vec<String>,
     pub cursor: usize,
+    /// A next-word suggestion rather than a composition list. Labelled with the key that takes it,
+    /// Tab, instead of a number: after a committed word the digit keys type Bengali digits, so a
+    /// numbered entry would promise something pressing that number does not do.
+    pub tab_hint: bool,
 }
 
 /// One candidate's measurements, in DIPs. The number and the word are measured separately because
@@ -252,6 +256,11 @@ impl CandidateWindow {
     /// Replace the list and highlight, re-measure, and show the window just below `anchor`
     /// (the composition's rectangle in screen coordinates). Arms the refine timer.
     pub fn show(&self, candidates: &[String], cursor: usize, anchor: &RECT) {
+        self.show_with(candidates, cursor, anchor, false);
+    }
+
+    /// show, choosing whether entries are numbered or labelled Tab (a next-word suggestion).
+    pub fn show_with(&self, candidates: &[String], cursor: usize, anchor: &RECT, tab_hint: bool) {
         if candidates.is_empty() {
             self.hide();
             return;
@@ -262,6 +271,7 @@ impl CandidateWindow {
             inner.content = Content {
                 candidates: candidates.to_vec(),
                 cursor,
+                tab_hint,
             };
             inner.measure()
         };
@@ -298,8 +308,12 @@ impl Drop for CandidateWindow {
     }
 }
 
-fn number_label(index: usize) -> String {
-    format!("{}", index + 1)
+fn number_label(content: &Content, index: usize) -> String {
+    if content.tab_hint {
+        "Tab".to_string()
+    } else {
+        format!("{}", index + 1)
+    }
 }
 
 // The window's user data holds a pointer, and Win32 spells that differently per architecture:
@@ -495,7 +509,7 @@ impl Inner {
             .iter()
             .enumerate()
             .map(|(i, word)| {
-                let n = text_metrics(dwrite, format, &number_label(i))?;
+                let n = text_metrics(dwrite, format, &number_label(&self.content, i))?;
                 let w = text_metrics(dwrite, format, word)?;
                 Some(CellMetrics {
                     number_width: n.width,
@@ -599,7 +613,7 @@ impl Inner {
                 }
                 let number_brush = if selected { &highlight_text } else { &number };
                 let word_brush = if selected { &highlight_text } else { &text };
-                draw_text(&target, &dwrite, &format, &number_label(i), x, height_dip, number_brush);
+                draw_text(&target, &dwrite, &format, &number_label(&self.content, i), x, height_dip, number_brush);
                 draw_text(&target, &dwrite, &format, word, x + cell.number_width + NUMBER_GAP, height_dip, word_brush);
                 x += cell.width() + GAP;
             }

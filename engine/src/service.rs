@@ -30,6 +30,14 @@ pub const VERSION: &str = match crate::update::PRODUCT_VERSION {
 pub const DEFAULT_PORT: u16 = 47123;
 pub const DEFAULT_DEADLINE_MS: f64 = 12.0;
 
+/// First-letter prediction stops after this many letters. Measured on held-out chat
+/// (`likhi-nextword --letters`): by four letters the ordinary list has the word on screen more
+/// often than not, and each further letter leaves prediction less to add.
+pub const PREDICT_MAX_LETTERS: usize = 4;
+/// How many predicted words are offered per keystroke. Two: a third added nothing measurable and
+/// pushes one more ordinary candidate off the list.
+pub const PREDICT_OFFERED: usize = 2;
+
 /// Identifies one suggestion request: the input, the single word of context that can change the
 /// ranking, and how many candidates were asked for.
 type Key = (String, Option<String>, usize);
@@ -212,6 +220,25 @@ impl SuggestService {
         }
     }
 
+    /// Words likely to follow the last committed word; empty when not confident enough to show.
+    pub fn next_words(&self, context: &[String], k: usize, min_share: f64) -> Vec<String> {
+        match context.last() {
+            Some(prev) => self.engine.next_words(prev, k, min_share),
+            None => Vec::new(),
+        }
+    }
+
+    /// First-letter prediction: words that follow the last committed word and fit what has been
+    /// typed of the next one. Only while the word is short -- see `PREDICT_MAX_LETTERS`.
+    pub fn next_completions(&self, roman: &str, context: &[String]) -> Vec<String> {
+        match context.last() {
+            Some(prev) if !roman.is_empty() && roman.chars().count() <= PREDICT_MAX_LETTERS => {
+                self.engine.next_completions(prev, roman, PREDICT_OFFERED)
+            }
+            _ => Vec::new(),
+        }
+    }
+
     pub fn learn(&self, roman: &str, chosen: &str) {
         self.engine.learn(roman, chosen);
         let (lock, _) = &*self.shared;
@@ -325,6 +352,30 @@ pub fn handle_request(svc: &SuggestService, tel: &Telemetry, raw: &[u8]) -> Vec<
             let op = req.get("op").and_then(Value::as_str).unwrap_or("suggest");
             match op {
                 "ping" => json!({"ok": true, "version": VERSION}),
+                // Next-word suggestions, asked right after a word is committed with Space. Counted
+                // when shown and when taken -- numbers only, never the words -- so the pilot says
+                // whether the strip earns its place rather than anyone guessing.
+                "next" => {
+                    let context = string_list(&req, "context");
+                    let k = req.get("k").and_then(Value::as_u64).unwrap_or(3).clamp(1, 5) as usize;
+                    let min_share = req.get("min_share").and_then(Value::as_f64).unwrap_or(0.2);
+                    let words = svc.next_words(&context, k, min_share);
+                    if !words.is_empty() && tel.mode != Mode::Off {
+                        tel.note("next_shown");
+                    }
+                    json!({"ok": true, "candidates": words})
+                }
+                "next_taken" => {
+                    if tel.mode != Mode::Off {
+                        tel.note("next_taken");
+                    }
+                    json!({"ok": true})
+                }
+                // "Check now", from the tray menu or the Likhi window. Runs the same signed check the
+                // daily one does and offers what it finds; the answer says what happened so the window
+                // can show it. Works with daily checks switched off, because asking is consent.
+                #[cfg(windows)]
+                "update_check" => json!(crate::update::check_now()),
                 // Drawing the candidate list for a text service that cannot draw one itself. Only
                 // the drawing: what the candidates are and which is highlighted was decided by the
                 // caller, which is the only side that knows what is being typed.
@@ -340,7 +391,8 @@ pub fn handle_request(svc: &SuggestService, tel: &Telemetry, raw: &[u8]) -> Vec<
                         right: at(2),
                         bottom: at(3),
                     };
-                    let shown = crate::uihost::show(items, cursor, rect);
+                    let tab_hint = req.get("tab_hint").and_then(Value::as_bool).unwrap_or(false);
+                    let shown = crate::uihost::show(items, cursor, rect, tab_hint);
                     json!({"ok": true, "shown": shown})
                 }
                 #[cfg(windows)]
@@ -358,6 +410,10 @@ pub fn handle_request(svc: &SuggestService, tel: &Telemetry, raw: &[u8]) -> Vec<
                     json!({
                         "ok": true,
                         "candidates": cands,
+                        // Kept apart from `candidates` rather than merged in here: the keyboard
+                        // decides where they go, and the ranking every golden test pins stays
+                        // exactly what it was.
+                        "next": svc.next_completions(roman, &context),
                         "partial": partial,
                         "strong": strong,
                         // Two decimals, as Python's round(x, 2) produces.
@@ -369,6 +425,11 @@ pub fn handle_request(svc: &SuggestService, tel: &Telemetry, raw: &[u8]) -> Vec<
                     let chosen = req.get("chosen").and_then(Value::as_str).unwrap_or("");
                     let context = string_list(&req, "context");
                     svc.learn(roman, chosen);
+                    // Whether first-letter prediction earns its place is how often the word taken
+                    // was one it put on screen. Counted, never with the word.
+                    if tel.mode != Mode::Off && req.get("predicted").and_then(Value::as_bool).unwrap_or(false) {
+                        tel.note("predicted_taken");
+                    }
                     if tel.mode != Mode::Off {
                         let index = req.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
                         let top1 = match req.get("top1").and_then(Value::as_str) {

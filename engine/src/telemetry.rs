@@ -511,6 +511,20 @@ impl Telemetry {
         }
     }
 
+    /// Write what has been counted to the local files, without shipping it.
+    ///
+    /// For "Exit Likhi". The counters live in memory until the next timed flush, so exiting without
+    /// this loses up to an interval of them -- and shipping is network I/O that could hold the exit
+    /// for its whole timeout. Written locally, the lines go out with the next sync after Likhi starts
+    /// again.
+    pub fn flush_local(&self) {
+        if self.mode == Mode::Off {
+            return;
+        }
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        self.flush_locked(&mut st);
+    }
+
     /// Ship new lines to the configured destinations.
     ///
     /// Only the bytes written since the last successful sync are sent, as immutable numbered

@@ -16,6 +16,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
@@ -107,10 +108,25 @@ namespace Likhi
             return false;
         }
 
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern bool WaitNamedPipe(string name, uint timeoutMs);
+
+        // Whether an engine is running for this Windows session, answered from its pipe without
+        // connecting. Instant either way, where asking the socket costs the full connect timeout when
+        // nothing is listening: Windows retries a refused loopback connection instead of failing it.
+        public static bool EngineRunning()
+        {
+            string name = @"\\.\pipe\likhi-engine-s" + Process.GetCurrentProcess().SessionId;
+            if (WaitNamedPipe(name, 1)) return true;
+            const int ERROR_SEM_TIMEOUT = 121; // the pipe is there; every instance is busy
+            return Marshal.GetLastWin32Error() == ERROR_SEM_TIMEOUT;
+        }
+
         // Ask the engine directly. Anything else -- a running process, a registry value -- can be
         // true while the engine is wedged.
         public static bool EngineResponds()
         {
+            if (!EngineRunning()) return false;
             try
             {
                 using (TcpClient c = new TcpClient())
@@ -272,6 +288,98 @@ namespace Likhi
             SetSetting("check_updates", on ? "true" : "false");
         }
 
+        public static bool NextWordOn()
+        {
+            return Setting("next_word", "true") != "false";
+        }
+
+        public static void SetNextWord(bool on)
+        {
+            // Bare boolean, as above: the text service reads it as one.
+            SetSetting("next_word", on ? "true" : "false");
+        }
+
+        // "Check now". The engine does the checking -- the same signed check the daily one does --
+        // and puts up its own notification when it finds an update, so this only reports what
+        // happened. Blocks for as long as the check takes; call it off the window's thread.
+        public static void CheckForUpdates(out string message, out MessageBoxIcon icon)
+        {
+            icon = MessageBoxIcon.Information;
+            string reply = null;
+            if (EngineRunning())
+            {
+                try
+                {
+                    using (TcpClient c = new TcpClient())
+                    {
+                        IAsyncResult ar = c.BeginConnect("127.0.0.1", EnginePort, null, null);
+                        if (ar.AsyncWaitHandle.WaitOne(3000))
+                        {
+                            c.EndConnect(ar);
+                            using (NetworkStream s = c.GetStream())
+                            {
+                                // Minutes, not seconds: when there is an update the engine downloads
+                                // and verifies the whole installer, about 40 MB, before it answers.
+                                s.ReadTimeout = 300000;
+                                byte[] req = Encoding.UTF8.GetBytes("{\"op\":\"update_check\"}\n");
+                                s.Write(req, 0, req.Length);
+                                reply = ReadLine(s);
+                            }
+                        }
+                    }
+                }
+                catch { reply = null; }
+            }
+            if (reply == null)
+            {
+                icon = MessageBoxIcon.Warning;
+                message = "The Likhi engine is not running, so it cannot check. Start it with Restart engine and try again.";
+                return;
+            }
+            string current = JsonString(reply, "current");
+            string version = JsonString(reply, "version");
+            string error = JsonString(reply, "error");
+            switch (JsonString(reply, "status"))
+            {
+                case "up_to_date":
+                    message = "You have the newest version of Likhi (" + current + ").";
+                    break;
+                case "available":
+                    message = "Likhi " + version + " is downloaded and verified.\n\n" +
+                        "To install it, click the notification, or right-click the Likhi icon by the clock " +
+                        "and choose Install update. Windows will ask for permission.";
+                    break;
+                case "dev":
+                    message = "This is a development build. It does not update itself.";
+                    break;
+                default:
+                    icon = MessageBoxIcon.Warning;
+                    message = "Could not check for updates" + (error.Length > 0 ? ":\n\n" + error : ".");
+                    break;
+            }
+        }
+
+        static string ReadLine(NetworkStream s)
+        {
+            var bytes = new List<byte>();
+            byte[] one = new byte[1];
+            while (s.Read(one, 0, 1) == 1)
+            {
+                if (one[0] == (byte)'\n') break;
+                bytes.Add(one[0]);
+            }
+            return bytes.Count == 0 ? null : Encoding.UTF8.GetString(bytes.ToArray());
+        }
+
+        // One string field of a flat JSON reply. The engine's replies are a handful of plain values,
+        // so a pattern is enough and no JSON library has to ship with this window.
+        static string JsonString(string json, string key)
+        {
+            Match m = Regex.Match(json, "\"" + Regex.Escape(key) + "\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+            if (!m.Success) return "";
+            try { return Regex.Unescape(m.Groups[1].Value); } catch { return m.Groups[1].Value; }
+        }
+
         /// <summary>Installed families that actually contain Bengali, so the list cannot offer a
         /// font that would render every candidate as boxes.</summary>
         public static List<string> BanglaFonts()
@@ -354,6 +462,13 @@ namespace Likhi
                 }
             }
             catch { }
+            StartEngine();
+        }
+
+        // Start the engine without stopping anything. Starting a second one is harmless -- it finds
+        // the first and exits -- and starting it is also how someone undoes "Exit Likhi".
+        public static void StartEngine()
+        {
             try
             {
                 ProcessStartInfo psi = new ProcessStartInfo(
@@ -371,7 +486,12 @@ namespace Likhi
     {
         readonly bool dark = IsDarkTheme();
         Label statusKeyboard, statusEngine;
-        CheckBox autostart, reporting, updates;
+        CheckBox autostart, reporting, updates, nextWord;
+        Button checkNow;
+        // Polls for the engine after this window started it, so the status line turns green when it
+        // is ready rather than when a fixed sleep guessed it would be.
+        System.Windows.Forms.Timer starting;
+        DateTime startingSince;
         TextBox tryHere;
         ComboBox fontBox, sizeBox;
         // Set while the window writes its own controls. Without it, showing the current state fires
@@ -409,9 +529,9 @@ namespace Likhi
             // had chosen into the settings file before the window was even on screen.
             loading = true;
             Text = "Likhi";
-            // 628 rather than 600: the extra 28 is the credit line under the buttons. The layout
-            // below is a hand-laid grid with no auto-sizing, so height is changed here or nowhere.
-            ClientSize = new Size(520, 695);
+            // A placeholder: the real height is set at the end of construction, from where the
+            // last line landed. Fixed heights were edited by hand every time a line was added.
+            ClientSize = new Size(520, 700);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
@@ -435,7 +555,9 @@ namespace Likhi
                 "2.   Type the way the word sounds:   amar  →  আমার",
                 "3.   Space or Enter accepts the highlighted word.",
                 "4.   Press 1–5 to pick a different one, or ← → to move.",
-                "5.   F12 switches to plain English without leaving Bangla mode."
+                "5.   F12 switches to plain English without leaving Bangla mode.",
+                "6.   After Space, a likely next word may appear:  Tab  types it.",
+                "7.   Start the next word, and words that usually follow join the list."
             };
             foreach (string s in steps) { Body(s, 24, y, Fg, "Nirmala UI", 22); y += 24; }
             y += 14;
@@ -469,13 +591,20 @@ namespace Likhi
             Controls.Add(tryHere);
             y += 42;
 
+            nextWord = Check("Suggest the next word  (Tab after Space, and in the list as you type)", 18, y); y += 26;
             autostart = Check("Start Likhi when I sign in", 18, y); y += 26;
             reporting = Check("Share anonymous usage data to improve suggestions", 18, y); y += 24;
             Body("Counts only, plus words where the first suggestion was wrong. Never passwords,", 40, y, Dim, "Segoe UI", 18);
             y += 17;
             Body("numbers, or anything typed into a password box.", 40, y, Dim, "Segoe UI", 18);
             y += 26;
-            updates = Check("Check for updates once a day", 18, y); y += 24;
+            updates = Check("Check for updates once a day", 18, y);
+            // Works with the daily check switched off: that setting stops Likhi asking by itself,
+            // and clicking this is asking.
+            checkNow = Btn("Check now", 392, y - 3, 110);
+            checkNow.Height = 26;
+            checkNow.Click += delegate { CheckNow(); };
+            y += 24;
             // Two lines, like the reporting note above: one would be clipped at this width.
             Body("Tells GitHub this computer runs Likhi. Every update is signed,", 40, y, Dim, "Segoe UI", 18);
             y += 17;
@@ -485,7 +614,7 @@ namespace Likhi
             Button diag = Btn("Run diagnostics", 18, y, 150);
             diag.Click += delegate { RunDiagnostics(); };
             Button restart = Btn("Restart engine", 180, y, 140);
-            restart.Click += delegate { Env.RestartEngine(); System.Threading.Thread.Sleep(1500); Refresh2(); };
+            restart.Click += delegate { Env.RestartEngine(); WaitForEngine(); };
             Button site = Btn("Project page", 332, y, 170);
             site.Click += delegate { Open("https://github.com/KhaledBinAmir/likhi"); };
             y += 40;
@@ -494,7 +623,29 @@ namespace Likhi
             // লিখি would come out as boxes on a machine without font linking.
             Body("লিখি  ·  made by Khaled Bin Amir  ·  free and open source, MIT",
                 18, y, Dim, "Nirmala UI", 20);
+            y += 28;
 
+            // As tall as the content, but never taller than the screen: at 1366x768, still the
+            // usual Bangladeshi laptop, the full window ran under the taskbar with its buttons out
+            // of reach. Past that it scrolls, and is widened by the scroll bar so nothing is
+            // covered.
+            int chrome = Height - ClientSize.Height;
+            int room = Screen.FromPoint(Cursor.Position).WorkingArea.Height - chrome - 16;
+            if (y <= room)
+                ClientSize = new Size(520, y);
+            else
+            {
+                AutoScroll = true;
+                ClientSize = new Size(520 + SystemInformation.VerticalScrollBarWidth, room);
+            }
+
+            nextWord.CheckedChanged += delegate
+            {
+                if (loading) return;
+                // Picked up by the keyboard within a couple of seconds, in every application, with
+                // nothing restarted.
+                Env.SetNextWord(nextWord.Checked);
+            };
             autostart.CheckedChanged += delegate
             {
                 if (loading) return;
@@ -528,7 +679,17 @@ namespace Likhi
                 PreviewFont();
             };
 
+            // Opening Likhi starts it. After "Exit Likhi" from the tray this is how it comes back --
+            // what people do with any program they closed -- and after a failed start it is a retry.
+            bool startedHere = false;
+            if (!Env.EngineRunning())
+            {
+                Env.StartEngine();
+                startedHere = true;
+            }
+
             Refresh2();
+            if (startedHere) WaitForEngine();
             // Construction is over: from here a change really is someone clicking.
             //
             // This has to be the last statement of the constructor, not the last of RefreshInner.
@@ -563,6 +724,7 @@ namespace Likhi
             autostart.Checked = Env.AutostartOn();
             reporting.Checked = Env.ReportingOn();
             updates.Checked = Env.UpdatesOn();
+            nextWord.Checked = Env.NextWordOn();
 
             string family = Env.Setting("font_name", "");
             if (family.Length == 0 || !fontBox.Items.Contains(family))
@@ -576,6 +738,53 @@ namespace Likhi
             if (!sizeBox.Items.Contains(size)) size = "14";
             sizeBox.SelectedItem = size;
             PreviewFont();
+        }
+
+        /// <summary>Say the engine is starting, and refresh once it answers -- or after ten seconds,
+        /// when the status line then says it is not responding, which by then is true.</summary>
+        void WaitForEngine()
+        {
+            statusEngine.Text = "…  Starting the suggestion engine";
+            statusEngine.ForeColor = Dim;
+            startingSince = DateTime.Now;
+            if (starting == null)
+            {
+                starting = new System.Windows.Forms.Timer();
+                starting.Interval = 400;
+                starting.Tick += delegate
+                {
+                    if (Env.EngineResponds() || (DateTime.Now - startingSince).TotalSeconds > 10)
+                    {
+                        starting.Stop();
+                        Refresh2();
+                    }
+                };
+            }
+            starting.Start();
+        }
+
+        void CheckNow()
+        {
+            checkNow.Enabled = false;
+            checkNow.Text = "Checking…";
+            var worker = new System.Threading.Thread(delegate ()
+            {
+                string message;
+                MessageBoxIcon icon;
+                Env.CheckForUpdates(out message, out icon);
+                try
+                {
+                    BeginInvoke((MethodInvoker)delegate
+                    {
+                        checkNow.Text = "Check now";
+                        checkNow.Enabled = true;
+                        MessageBox.Show(this, message, "Likhi updates", MessageBoxButtons.OK, icon);
+                    });
+                }
+                catch (InvalidOperationException) { } // the window was closed while checking
+            });
+            worker.IsBackground = true;
+            worker.Start();
         }
 
         /// <summary>Show the chosen face in the try-it box, so the choice is visible before typing.</summary>

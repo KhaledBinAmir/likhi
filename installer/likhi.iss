@@ -8,6 +8,30 @@
 ; rights once and leaves the user with a working Bangla keyboard and nothing to configure.
 
 #define AppName "Likhi"
+; 0.5.1: an icon beside the clock, as Avro and Bijoy have, and a way to exit. Left click opens the
+;        Likhi window; right click offers Check for updates, Install update when one is waiting, and
+;        Exit Likhi. Until now nothing short of Task Manager stopped it. Exit means exit: the keyboard
+;        restarts an engine that is not running, which is right after a crash and wrong here, so an
+;        exit holds until Likhi is opened again or the next sign-in. Meanwhile keys go through as
+;        plain English, instead of opening an underlined Latin word nothing could turn into Bangla.
+;        Next-word suggestions. After Space, the word most likely to come next appears, labelled Tab,
+;        when the engine is sure enough: measured on held-out chat it is right about a quarter of the
+;        times it appears, where always showing a guess is right under a tenth of the time. Tab
+;        types it; every other key does what it always did, Enter and the digits included.
+;        Then first-letter prediction: once the next word is begun, words that usually follow the
+;        previous one and fit the letters so far join the ordinary list -- after its first two
+;        entries, so Space and 2 mean exactly what they meant before. On held-out chat the word
+;        being typed is on screen after one letter 35% of the time instead of 29%. Placed after the
+;        first entry instead, it pushed the wanted word down six times as often for no gain.
+;        The table's placeholder for a username is never offered: it was the top suggestion after
+;        the common greeting. Counted when shown and when taken, never with the word, and all of it
+;        can be switched off in the Likhi window.
+;        "Check now" for updates, in the window and the tray menu. The window scrolls on short
+;        screens instead of running under the taskbar.
+;        With the engine down, a keystroke no longer pays 120 ms every two seconds for a socket
+;        connection that cannot succeed: Windows retries a refused loopback connection for 2 s
+;        rather than failing it, and the connect timeout was always what ended the attempt. The
+;        engine starts a second sooner for the same reason.
 ; 0.5.0: Likhi updates itself. Once a day the engine looks for a newer release, downloads it, and
 ;        checks two things before offering it: that the release's manifest is signed by a key that
 ;        has never left the publisher's machine, and that the installer matches the size and hash
@@ -168,7 +192,7 @@
 ;        running engine with PowerShell rather than WMIC, which Windows 11 no longer ships.
 ; 0.1.1: the engine did not look for the shell's config.json in the installed layout, so a fresh
 ;        install never reported telemetry.
-#define AppVersion "0.5.0"
+#define AppVersion "0.5.1"
 #define AppPublisher "Khaled Bin Amir"
 #define AppURL "https://github.com/KhaledBinAmir/likhi"
 #define PimeSource "C:\Program Files (x86)\PIME"

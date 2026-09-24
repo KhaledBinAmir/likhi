@@ -18,7 +18,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::avro::Avro;
 use crate::lexicon::{rec_u32, rec_u32_i8, rec_u32x3, Table};
@@ -35,6 +35,19 @@ const UNKNOWN_CONFIDENT_LOGP: f64 = -11.0;
 /// reaching the visible list disappear, top-1 is unchanged on every set, and top-5 moves by -0.02
 /// on Dakshina and -0.35 on the chat set.
 const FAST_TRUST_ROM_EXACT: u32 = 5;
+
+/// Words that are never offered as the next word, however often the table saw them there.
+///
+/// ইউজার ("user") is what the forum text the bigram table was partly built from put in place of a
+/// username. So after a greeting the table's most confident continuation is that placeholder:
+/// `likhi-nextword --list` shows it as the suggestion after 23 words, among them আসসালামুআলাইকুম,
+/// হেলো and তুমার -- and one insult. A tester who greets someone and is offered "user" concludes the
+/// keyboard is broken. Its real uses as a next word (গ্রাফিক্যাল ইউজার) are rare enough to lose.
+///
+/// Only next-word suggestions: typing the word is unaffected. Its count still stays in the total,
+/// so removing it lowers the other continuations' share rather than promoting them past the
+/// threshold on evidence that was really about a username.
+pub const NEVER_SUGGESTED_NEXT: &[&str] = &["ইউজার"];
 
 /// Bengali spellings of English letter names, longest-disambiguating first.
 ///
@@ -239,7 +252,17 @@ pub struct Engine {
     /// every keystroke behind the model -- the Python notes measuring exactly that, 120 ms round
     /// trips instead of 12, when a lock was held around the model call.
     personal: Option<Mutex<PersonalStore>>,
+    /// The words that follow one previous word, for next-word suggestions. See `followers`.
+    followers: Mutex<Option<(String, Arc<Followers>)>>,
 }
+
+/// What follows one word: `(times seen, word, coarse phonetic key)`, most frequent first.
+type Followers = Vec<(u32, String, String)>;
+
+/// How many of a word's followers are kept for next-word suggestions. The table holds thousands
+/// after a common word, and anything this far down the list is seen too rarely to be worth
+/// offering ahead of what the typed letters themselves suggest.
+const FOLLOWERS_KEPT: usize = 300;
 
 /// Raised when a suggestion was abandoned because newer input arrived. The Python uses an exception
 /// (`AbortedError`); here it is an absent result.
@@ -347,6 +370,7 @@ impl Engine {
             xlit,
             avro,
             personal: opts.personal.map(Mutex::new),
+            followers: Mutex::new(None),
         })
     }
 
@@ -390,6 +414,101 @@ impl Engine {
             Some(rec) => (rec_u32(rec) as f64 / total).ln() - self.unigram_logp(word),
             None => 0.4f64.ln(),
         }
+    }
+
+    /// The words most likely to follow `prev`, or nothing when the table is not confident.
+    ///
+    /// Confidence is the most frequent continuation's share of everything seen after `prev`. On
+    /// held-out chat sentences (`likhi-nextword`), always offering three gets the next word 18.2% of
+    /// the time; offering only when that share is at least 0.2 appears at 15.6% of positions and is
+    /// right 35.2% of the time. A strip that is usually wrong teaches people to ignore it, so the
+    /// threshold is the difference between a feature and noise.
+    ///
+    /// `prev` arrives as typed into the application; the table stores canonical forms, so it is
+    /// canonicalised for the lookup and the results are converted back.
+    pub fn next_words(&self, prev: &str, k: usize, min_share: f64) -> Vec<String> {
+        let Some(totals) = &self.bigram_totals else {
+            return Vec::new();
+        };
+        let Some(tot) = totals.get(&canonical(prev)) else {
+            return Vec::new();
+        };
+        let total = rec_u32(tot).max(1) as f64;
+        let followers = self.followers(prev);
+        match followers.first() {
+            Some((best, _, _)) if *best as f64 / total >= min_share => {}
+            _ => return Vec::new(),
+        }
+        followers.iter().take(k).map(|(_, w, _)| to_output(w)).collect()
+    }
+
+    /// Words that usually follow `prev` and that `roman` could be the beginning of.
+    ///
+    /// First-letter prediction. With no letters typed, the table is confident about the next word
+    /// only in about one gap in six, and a guess shown anyway is usually wrong. One letter changes
+    /// that: it rules out most of what can follow, and what is left is often the word. So once the
+    /// next word is begun, the words that fit both the previous word and the letters so far are
+    /// offered alongside the ordinary candidates.
+    ///
+    /// "Could be the beginning of" is decided on the coarse phonetic key -- the same key, compared
+    /// the same way, that finds ordinary completions -- so "k" and "kh" both reach খুব, and "ko"
+    /// reaches করবেন however the vowel is spelled. Most frequent after `prev` first.
+    pub fn next_completions(&self, prev: &str, roman: &str, k: usize) -> Vec<String> {
+        let r = normalize_roman(roman);
+        if r.is_empty() || k == 0 {
+            return Vec::new();
+        }
+        let typed = key_from_roman(&r, Level::Coarse);
+        if typed.is_empty() {
+            return Vec::new();
+        }
+        self.followers(prev)
+            .iter()
+            .filter(|(_, _, key)| key.starts_with(&typed))
+            .take(k)
+            .map(|(_, w, _)| to_output(w))
+            .collect()
+    }
+
+    /// Everything that follows `prev` in the table, most frequent first, with each word's key.
+    ///
+    /// Cached for one previous word. Every letter of the next word asks about the same previous
+    /// word, and after a common one the table holds thousands of followers: collecting and sorting
+    /// them once per word rather than once per keystroke is the difference between a lookup and a
+    /// few milliseconds of every letter.
+    fn followers(&self, prev: &str) -> Arc<Followers> {
+        let prev = canonical(prev);
+        if let Ok(cache) = self.followers.lock() {
+            if let Some((p, f)) = cache.as_ref() {
+                if *p == prev {
+                    return Arc::clone(f);
+                }
+            }
+        }
+        let mut found: Vec<(u32, String)> = match &self.bigrams {
+            Some(bigrams) => bigrams
+                .prefix_iter(&format!("{prev}\t"))
+                .into_iter()
+                .filter_map(|(key, rec)| key.split_once('\t').map(|(_, w)| (rec_u32(rec), w.to_string())))
+                .filter(|(_, w)| !NEVER_SUGGESTED_NEXT.contains(&w.as_str()))
+                .collect(),
+            None => Vec::new(),
+        };
+        found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        found.truncate(FOLLOWERS_KEPT);
+        let list: Arc<Followers> = Arc::new(
+            found
+                .into_iter()
+                .map(|(n, w)| {
+                    let key = key_from_bangla(&w, Level::Coarse);
+                    (n, w, key)
+                })
+                .collect(),
+        );
+        if let Ok(mut cache) = self.followers.lock() {
+            *cache = Some((prev, Arc::clone(&list)));
+        }
+        list
     }
 
     pub fn candidates(&self, roman: &str, use_model: bool) -> FeatTable {

@@ -45,6 +45,7 @@ Thumbs.db
 # Rust build output for the text service
 shell/target/
 engine/target/
+ui/target/
 
 # Reviewed by hand, then appended to data/feedback/words.jsonl. Until then it holds real
 # testers' typed words and does not belong in the repository.

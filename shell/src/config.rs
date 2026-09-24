@@ -29,6 +29,13 @@ pub struct Config {
     /// Candidate window face. Empty means the built-in preference chain.
     pub font_name: String,
     pub font_size: f32,
+    /// After a word is committed with Space, offer the words likely to come next. Tab takes the
+    /// first; any other key dismisses them.
+    pub next_word: bool,
+    /// How sure the engine must be before a suggestion appears: the top continuation's share of
+    /// everything seen after the previous word. 0.2 measured right 35% of the time in the top three,
+    /// against 18% when always shown -- see `likhi-nextword`.
+    pub next_word_min_share: f64,
 }
 
 impl Default for Config {
@@ -43,6 +50,8 @@ impl Default for Config {
             enter_commits: true,
             font_name: String::new(),
             font_size: 14.0,
+            next_word: true,
+            next_word_min_share: 0.2,
         }
     }
 }
