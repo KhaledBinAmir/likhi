@@ -256,7 +256,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let headers = rdr.headers().map(|h| h.clone()).unwrap_or_default();
+    let headers = rdr.headers().cloned().unwrap_or_default();
     // BanglaTLit names it `text_bengali`. Matched by substring, and a missing column is an error
     // rather than a guess: falling back to a fixed index picked the romanized column on the first
     // try, which has no Bengali tokens at all and would have measured an empty set as a result.
