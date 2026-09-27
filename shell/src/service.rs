@@ -180,6 +180,11 @@ pub struct TextService {
     draw_ourselves: Cell<bool>,
     /// The next-word settings as last read. See `next_word_share`.
     next_word: RefCell<NextWordSetting>,
+    /// The engine is drawing a list for this service right now (sandboxed applications only).
+    /// Hiding is a request to the engine, and it used to be sent on every focus change and every
+    /// input-method switch whether anything was shown or not -- the very request that froze
+    /// Unigram. Now it goes only when there is something to hide.
+    remote_shown: Cell<bool>,
 }
 
 /// The next-word switch and threshold, kept current while the service runs.
@@ -217,6 +222,7 @@ impl TextService {
             ui_element: RefCell::new(None),
             ui_element_id: Cell::new(0),
             draw_ourselves: Cell::new(true),
+            remote_shown: Cell::new(false),
             next_word: RefCell::new(NextWordSetting {
                 on: config.next_word,
                 after_space: config.next_word_after_space,
@@ -824,9 +830,21 @@ impl TextService_Impl {
             w.hide();
         }
         if crate::in_app_container() {
-            // Borrowed separately: `end_ui_element` above can re-enter through TSF, and holding a
-            // mutable borrow of the state across that is a panic waiting for an unlucky host.
-            self.state.borrow_mut().engine.ui_hide();
+            self.remote_hide();
+        }
+    }
+
+    /// Ask the engine to take down the list it is drawing for us -- only if it is drawing one.
+    ///
+    /// Borrowed with `try_borrow_mut`: this runs from focus changes and deactivation, which TSF can
+    /// deliver while another call of ours is still on the stack, and a panic across the COM
+    /// boundary would take the application down.
+    fn remote_hide(&self) {
+        if !self.remote_shown.replace(false) {
+            return;
+        }
+        if let Ok(mut s) = self.state.try_borrow_mut() {
+            s.engine.ui_hide();
         }
     }
 
@@ -924,7 +942,7 @@ impl TextService_Impl {
                 w.hide();
             }
             if crate::in_app_container() {
-                self.state.borrow_mut().engine.ui_hide();
+                self.remote_hide();
             }
             return;
         }
@@ -936,12 +954,13 @@ impl TextService_Impl {
             let anchor = match self.remote_anchor(ctx) {
                 Some(r) => r,
                 None => {
-                    self.state.borrow_mut().engine.ui_hide();
+                    self.remote_hide();
                     return;
                 }
             };
             let mut s = self.state.borrow_mut();
             s.engine.ui_show(&candidates, cursor, anchor, tab_hint, predicted_from);
+            self.remote_shown.set(true);
             return;
         }
 
@@ -1179,6 +1198,16 @@ fn text_before_is(ec: u32, caret: &ITfRange, expected: &[u16]) -> bool {
     }
 }
 
+/// A log line for something that should not happen but might happen on every keystroke once it
+/// does: written the first twenty times per application, so the log shows it without filling up.
+fn note_once(msg: &str) {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static WRITTEN: AtomicU32 = AtomicU32::new(0);
+    if WRITTEN.fetch_add(1, Ordering::Relaxed) < 20 {
+        log!("{msg}");
+    }
+}
+
 /// Keys that end the word being typed without being part of it or choosing among its candidates.
 /// Space, Enter and punctuation are handled where they add something of their own; these add
 /// nothing, so the word is committed as it stands and the key goes on to the application. The
@@ -1361,16 +1390,33 @@ impl ITfTextInputProcessorEx_Impl for TextService_Impl {
         let tim = ptim.ok()?.clone();
         self.client_id.set(tid);
         log!("activate in {} client={tid} flags={flags:#x}", self.app_name);
+        // The two registrations that make the keyboard work. Either can fail when Windows switches
+        // input methods faster than it finishes the previous switch -- the log has shown this
+        // service activated twice in one application before the first copy was deactivated. A
+        // failure used to go back to Windows unlogged, with the first registration left in place.
+        // Now it is logged, and what was done is undone, so nothing half-active is left behind.
+        let registered = unsafe {
+            (|| -> Result<()> {
+                let source: ITfSource = tim.cast()?;
+                let sink: ITfThreadMgrEventSink = self.to_interface();
+                let cookie = source.AdviseSink(&ITfThreadMgrEventSink::IID, &sink)?;
+                self.thread_mgr_cookie.set(cookie);
+                let keys: ITfKeystrokeMgr = tim.cast()?;
+                let key_sink: ITfKeyEventSink = self.to_interface();
+                keys.AdviseKeyEventSink(tid, &key_sink, true)
+            })()
+        };
+        if let Err(e) = registered {
+            log!("activation in {} failed ({e}); undoing it", self.app_name);
+            let cookie = self.thread_mgr_cookie.replace(TF_INVALID_COOKIE);
+            if cookie != TF_INVALID_COOKIE {
+                if let Ok(source) = tim.cast::<ITfSource>() {
+                    let _ = unsafe { source.UnadviseSink(cookie) };
+                }
+            }
+            return Err(e);
+        }
         unsafe {
-            let source: ITfSource = tim.cast()?;
-            let sink: ITfThreadMgrEventSink = self.to_interface();
-            let cookie = source.AdviseSink(&ITfThreadMgrEventSink::IID, &sink)?;
-            self.thread_mgr_cookie.set(cookie);
-
-            let keys: ITfKeystrokeMgr = tim.cast()?;
-            let key_sink: ITfKeyEventSink = self.to_interface();
-            keys.AdviseKeyEventSink(tid, &key_sink, true)?;
-
             // The atom that names our display attribute on a range. Without it the composition is
             // drawn like committed text, so nothing tells the person Space will replace it.
             if let Ok(categories) = CoCreateInstance::<_, ITfCategoryMgr>(
@@ -1491,6 +1537,16 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             // Never let a failure escape into the host: log it, drop our state, and let the key go.
             log!("key {vk:#x} failed: {e}");
             self.reset();
+            return Ok(BOOL(0));
+        }
+        // A letter was claimed, yet no word is open to show it: the document refused the edit or
+        // did not carry it out, without reporting an error. Claiming the key anyway made it vanish
+        // -- typing that simply did not appear, straight after switching into an application. Give
+        // it back instead: at worst the letter arrives as plain English, never not at all.
+        if letter(vk).is_some() && !self.composing() {
+            note_once(&format!("a letter could not open a word in {}; passed to the application", self.app_name));
+            self.state.borrow_mut().clear_word();
+            self.hide_window();
             return Ok(BOOL(0));
         }
         Ok(BOOL(1))

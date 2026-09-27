@@ -8,6 +8,18 @@
 ; rights once and leaves the user with a working Bangla keyboard and nothing to configure.
 
 #define AppName "Likhi"
+; 0.5.3: sandboxed applications no longer freeze. Unigram, the Start menu's search box and the
+;        notifications above the clock could stop responding for good -- the window still moved,
+;        nothing inside it did -- after the engine had restarted: an update, "Exit Likhi", or a
+;        crash. Captured with a debugger in a frozen Unigram: its UI thread was inside Likhi,
+;        waiting forever on a request to the engine over a connection that had died. Writing to a
+;        dead pipe fails at once, the failure was ignored, and the code then waited for an
+;        operation that had never started. Now a failed request fails at once, a cancelled one is
+;        waited for a second at most, every request first checks the connection is alive, and
+;        focus changes and input-method switches no longer talk to the engine at all unless Likhi
+;        has a list on screen to take down. Applications already frozen need a restart.
+;        A letter the document refuses to show is handed back to the application instead of
+;        vanishing, and a failed activation is logged and undone rather than left half-done.
 ; 0.5.2: Tab ends a word the way Space and Enter do -- it commits the highlighted word, then does its
 ;        own job, a tab or the next field. So do Delete, Home, End, Page Up and Down, Insert, the F
 ;        keys and every Ctrl or Alt combination. Each of them used to reach the application with the
@@ -206,7 +218,7 @@
 ;        running engine with PowerShell rather than WMIC, which Windows 11 no longer ships.
 ; 0.1.1: the engine did not look for the shell's config.json in the installed layout, so a fresh
 ;        install never reported telemetry.
-#define AppVersion "0.5.2"
+#define AppVersion "0.5.3"
 #define AppPublisher "Khaled Bin Amir"
 #define AppURL "https://github.com/KhaledBinAmir/likhi"
 #define PimeSource "C:\Program Files (x86)\PIME"

@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{
-    CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY, HANDLE, WAIT_OBJECT_0,
+    CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING, ERROR_PIPE_BUSY, HANDLE, WAIT_OBJECT_0,
 };
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, ReadFile, WriteFile, FILE_FLAG_OVERLAPPED, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
@@ -203,42 +203,77 @@ impl PipeConnection {
         }
     }
 
+    /// Whether an overlapped ReadFile/WriteFile is under way. Only then is there anything to wait
+    /// for.
+    ///
+    /// Its result used to be ignored, and that hung applications for good. On a pipe whose engine
+    /// has gone -- restarted by an update, by "Exit Likhi", or simply killed -- the call fails at
+    /// once and nothing is ever signalled. The code then waited out the deadline, "cancelled"
+    /// nothing, and waited for that nothing to finish, with no time limit, on the application's
+    /// UI thread. Captured in Unigram with a debugger: frozen inside GetOverlappedResult, called
+    /// from OnSetFocus while Windows switched input methods, which is when the list is hidden.
+    fn started(result: windows::core::Result<()>) -> std::io::Result<()> {
+        match result {
+            Ok(()) => Ok(()),
+            Err(e) if e.code() == ERROR_IO_PENDING.to_hresult() => Ok(()),
+            Err(e) => Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, format!("pipe: {e}"))),
+        }
+    }
+
     /// Wait for an overlapped operation, cancelling it if the deadline passes.
     ///
-    /// On the timeout path the wait afterwards is not optional. `CancelIoEx` only *asks*; until the
-    /// cancellation completes the kernel still owns the OVERLAPPED and the buffer, both of which
-    /// are on this stack frame and about to go away. Waiting is bounded -- a cancelled I/O on a
-    /// pipe completes at once -- and it is the difference between a timeout and memory corruption
-    /// inside someone's browser.
-    fn finish(&self, ov: &mut OVERLAPPED, timeout: Duration) -> std::io::Result<u32> {
+    /// After a cancel the kernel may still own the OVERLAPPED and the buffer until the cancellation
+    /// completes, so both live on the heap and are handed back to the caller in `Stuck` if it has
+    /// not completed within a second: the caller leaks them rather than free memory the kernel can
+    /// still write to. Waiting without a limit is what froze applications, and a stack frame that
+    /// goes away under a pending I/O is memory corruption inside someone's browser; this does
+    /// neither.
+    fn finish(&self, ov: &mut OVERLAPPED, timeout: Duration) -> Result<u32, Finish> {
         let ms = timeout.as_millis().min(u128::from(u32::MAX)) as u32;
         let timed_out = unsafe { WaitForSingleObject(self.event, ms) } != WAIT_OBJECT_0;
         if timed_out {
-            unsafe {
+            let released = unsafe {
                 let _ = CancelIoEx(self.handle, Some(ov));
-                let mut discarded = 0u32;
-                let _ = GetOverlappedResult(self.handle, ov, &mut discarded, true);
+                WaitForSingleObject(self.event, 1000) == WAIT_OBJECT_0
+            };
+            if !released {
+                return Err(Finish::Stuck);
             }
-            return Err(std::io::Error::new(
+            let mut discarded = 0u32;
+            unsafe {
+                let _ = GetOverlappedResult(self.handle, ov, &mut discarded, false);
+            }
+            return Err(Finish::Failed(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
                 "engine did not answer within the deadline",
-            ));
+            )));
         }
         let mut moved = 0u32;
         unsafe { GetOverlappedResult(self.handle, ov, &mut moved, false) }
-            .map_err(|e| std::io::Error::other(format!("overlapped: {e}")))?;
+            .map_err(|e| Finish::Failed(std::io::Error::other(format!("overlapped: {e}"))))?;
         Ok(moved)
     }
 
     fn write_all(&mut self, data: &[u8], timeout: Duration) -> std::io::Result<()> {
         let mut sent = 0usize;
         while sent < data.len() {
-            let mut ov = self.overlapped();
+            // The bytes and the OVERLAPPED are owned by the heap for as long as the kernel might
+            // use them: see `finish`.
+            let chunk: Box<[u8]> = data[sent..].into();
+            let mut ov = Box::new(self.overlapped());
             unsafe {
                 let _ = ResetEvent(self.event);
-                let _ = WriteFile(self.handle, Some(&data[sent..]), None, Some(&mut ov));
+                Self::started(WriteFile(self.handle, Some(&chunk), None, Some(&mut *ov)))?;
             }
-            sent += self.finish(&mut ov, timeout)? as usize;
+            match self.finish(&mut ov, timeout) {
+                Ok(n) => sent += n as usize,
+                Err(Finish::Failed(e)) => return Err(e),
+                Err(Finish::Stuck) => {
+                    Box::leak(chunk);
+                    Box::leak(ov);
+                    return Err(stuck());
+                }
+            }
         }
         Ok(())
     }
@@ -259,13 +294,21 @@ impl PipeConnection {
                     "engine did not answer within the deadline",
                 ));
             }
-            let mut buf = [0u8; 8192];
-            let mut ov = self.overlapped();
+            let mut buf: Box<[u8]> = vec![0u8; 8192].into_boxed_slice();
+            let mut ov = Box::new(self.overlapped());
             unsafe {
                 let _ = ResetEvent(self.event);
-                let _ = ReadFile(self.handle, Some(&mut buf), None, Some(&mut ov));
+                Self::started(ReadFile(self.handle, Some(&mut buf), None, Some(&mut *ov)))?;
             }
-            let n = self.finish(&mut ov, left)? as usize;
+            let n = match self.finish(&mut ov, left) {
+                Ok(n) => n as usize,
+                Err(Finish::Failed(e)) => return Err(e),
+                Err(Finish::Stuck) => {
+                    Box::leak(buf);
+                    Box::leak(ov);
+                    return Err(stuck());
+                }
+            };
             if n == 0 {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,
@@ -275,6 +318,17 @@ impl PipeConnection {
             self.pending.extend_from_slice(&buf[..n]);
         }
     }
+}
+
+/// How `PipeConnection::finish` ended when it did not succeed.
+enum Finish {
+    Failed(std::io::Error),
+    /// Cancelled, but the kernel had not let go of the I/O a second later.
+    Stuck,
+}
+
+fn stuck() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::TimedOut, "engine did not answer, and the request could not be withdrawn")
 }
 
 impl Drop for PipeConnection {
@@ -520,6 +574,11 @@ impl Engine {
     fn call(&mut self, request: &str, timeout: Duration) -> std::io::Result<String> {
         let mut last_error = None;
         for _attempt in 0..2 {
+            // A connection to an engine that has since gone is found out here, by a peek that
+            // cannot block, rather than by a request that has to time out first.
+            if self.transport.as_ref().is_some_and(|t| !t.alive()) {
+                self.transport = None;
+            }
             if self.transport.is_none() {
                 self.connect()?;
             }
@@ -722,6 +781,39 @@ mod tests {
             read_timeout_for(COMMIT_DEADLINE_MS)
         );
         println!("bhalobasha took {took:?}");
+    }
+
+    /// The hang found in Unigram, reproduced without an application: a connection whose engine end
+    /// has gone -- as after an update, or "Exit Likhi" -- must fail at once. Before the fix this
+    /// test never returned: the failed write was ignored and its completion waited for forever.
+    #[test]
+    fn a_pipe_whose_engine_went_away_fails_at_once() {
+        use windows::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
+        use windows::Win32::System::Pipes::{CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT};
+        let name = format!(r"\\.\pipe\likhi-test-gone-{}", std::process::id());
+        let server = unsafe {
+            CreateNamedPipeW(
+                PCWSTR(wide(&name).as_ptr()),
+                PIPE_ACCESS_DUPLEX,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                1,
+                4096,
+                4096,
+                0,
+                None,
+            )
+        };
+        assert!(!server.is_invalid(), "test pipe");
+        let mut client = PipeConnection::connect(&name).expect("connects to the test pipe");
+        unsafe {
+            let _ = CloseHandle(server); // the engine goes away
+        }
+        let started = Instant::now();
+        let wrote = client.write_all(b"{\"op\":\"ui_hide\"}\n", Duration::from_millis(104));
+        let read = client.read_line(Duration::from_millis(104));
+        assert!(wrote.is_err() || read.is_err(), "a dead pipe must not look alive");
+        assert!(!client.alive(), "and the peek must see it");
+        assert!(started.elapsed() < Duration::from_millis(1500), "took {:?}", started.elapsed());
     }
 
     /// With no engine at all, a keystroke must not pay for the discovery: the first attempt fails

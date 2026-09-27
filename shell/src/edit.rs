@@ -54,6 +54,16 @@ impl EditSession {
         // Two results: the outer one says whether the request was accepted, the inner HRESULT is
         // what the session itself returned. Both have to be good for the edit to have happened.
         let hr = unsafe { context.RequestEditSession(client_id, &session, flags) }?;
+        // Anything but a plain S_OK means the edit did not happen as asked: refused, or queued for
+        // later. Logged, a few times per application, because a keystroke that depends on this
+        // edit otherwise disappears without a trace.
+        if hr != windows::Win32::Foundation::S_OK {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static SEEN: AtomicU32 = AtomicU32::new(0);
+            if SEEN.fetch_add(1, Ordering::Relaxed) < 20 {
+                crate::log!("edit session not carried out as asked: {:#010x}", hr.0 as u32);
+            }
+        }
         hr.ok()
     }
 }

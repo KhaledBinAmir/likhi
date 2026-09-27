@@ -105,6 +105,13 @@ public static class Keys
 
     [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
 
+    // Win+Space, the input-method switch, pressed for real.
+    public static void WinSpace()
+    {
+        if (!InFront()) throw new Exception("stopped: Notepad is no longer the foreground window");
+        Raw(0x5B, false); Raw(0x20, false); Raw(0x20, true); Raw(0x5B, true);
+    }
+
     // A real left click at (x, y), in the same coordinates UI Automation reports to this process.
     // Refuses unless the target is in front, like a keystroke.
     public static void Click(int x, int y)
@@ -189,6 +196,11 @@ public static class Ime
     {
         Activate(new Profile { Type = 1, LangId = 0x0845, Clsid = LikhiClsid, ProfileGuid = LikhiProfile });
     }
+
+    public static void ActivateEnglish()
+    {
+        Activate(new Profile { Type = 2, LangId = 0x0409, Hkl = (IntPtr)0x04090409 });
+    }
 }
 
 public static class Wnd
@@ -213,6 +225,39 @@ public static class Wnd
             return true;
         }, IntPtr.Zero);
         return found;
+    }
+
+    [DllImport("user32.dll")] static extern IntPtr GetKeyboardLayout(uint thread);
+    [DllImport("user32.dll")] static extern IntPtr SendMessageTimeout(IntPtr h, uint m, IntPtr w, IntPtr l, uint flags, uint ms, out IntPtr r);
+
+    // The input language of the thread that owns `hwnd`: 0x0845 for Likhi's Bangla, 0x0409 English.
+    public static int LanguageOf(IntPtr hwnd)
+    {
+        uint pid;
+        uint thread = GetWindowThreadProcessId(hwnd, out pid);
+        return (int)(GetKeyboardLayout(thread).ToInt64() & 0xFFFF);
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageTimeoutW")]
+    static extern IntPtr SendText(IntPtr h, uint m, IntPtr w, StringBuilder l, uint flags, uint ms, out IntPtr r);
+
+    // A control's text, from another process: WM_GETTEXT, with a timeout so a hung window cannot
+    // hang the test.
+    public static string TextOf(IntPtr hwnd)
+    {
+        var sb = new StringBuilder(8192);
+        IntPtr r;
+        SendText(hwnd, 0x000D, (IntPtr)sb.Capacity, sb, 0x0002, 2000, out r);
+        return sb.ToString();
+    }
+
+    // How long the window takes to answer a message, in ms; -1 if not within `limitMs` (hung).
+    public static int AnswersIn(IntPtr hwnd, uint limitMs)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        IntPtr r;
+        bool ok = SendMessageTimeout(hwnd, 0, IntPtr.Zero, IntPtr.Zero, 0x0002, limitMs, out r) != IntPtr.Zero;
+        return ok ? (int)sw.ElapsedMilliseconds : -1;
     }
 
     // The popup menu on screen that belongs to process `pid`, if any.
@@ -577,6 +622,101 @@ $cases = [ordered]@{
         Clear-Document; Send-Keys 'ami {WAIT}{WAIT}ami '
         Expect-Text "ami $AMI "
         Expect-True 'engine running again' (Engine-Running)
+    }
+    # Switching language, slowly and then faster, in one application: does it change, and does
+    # typing follow it?
+    switch_basic = {
+        foreach ($wait in 1000, 1000, 300, 300, 60, 60) {
+            foreach ($to in 'English', 'Likhi') {
+                Focus-Notepad
+                if ($to -eq 'Likhi') { [Ime]::ActivateLikhi() } else { [Ime]::ActivateEnglish() }
+                Start-Sleep -Milliseconds $wait
+                $lang = [Wnd]::LanguageOf($script:notepad)
+                $before = Text
+                Send-Keys $(if ($to -eq 'Likhi') { 'ami ' } else { 'ok ' })
+                $got = (Text).Substring([math]::Min($before.Length, (Text).Length))
+                $want = if ($to -eq 'Likhi') { "$AMI " } else { 'ok ' }
+                [void]$script:results.Add([pscustomobject]@{ Case = $script:current; Check = ("to {0}, wait {1} ms, lang 0x{2:X4}" -f $to, $wait, $lang); Pass = ($got -ceq $want); Expected = (Show $want); Got = (Show $got) })
+            }
+        }
+        [Ime]::ActivateLikhi()
+    }
+    # The same with the key people actually press: Win+Space, which moves to the next input method.
+    switch_winspace = {
+        [Ime]::ActivateLikhi(); Start-Sleep -Milliseconds 500
+        foreach ($wait in 800, 800, 300, 300, 80, 80) {
+            Focus-Notepad
+            $from = [Wnd]::LanguageOf($script:notepad)
+            [Keys]::WinSpace()
+            Start-Sleep -Milliseconds $wait
+            $lang = [Wnd]::LanguageOf($script:notepad)
+            $bangla = $lang -eq 0x0845
+            $before = Text
+            Send-Keys $(if ($bangla) { 'ami ' } else { 'ok ' })
+            $got = (Text).Substring([math]::Min($before.Length, (Text).Length))
+            $want = if ($bangla) { "$AMI " } else { 'ok ' }
+            [void]$script:results.Add([pscustomobject]@{ Case = $script:current; Check = ("0x{0:X4} -> 0x{1:X4} after {2} ms" -f $from, $lang, $wait); Pass = ($got -ceq $want -and $lang -ne $from); Expected = (Show $want); Got = (Show $got) })
+        }
+        [Ime]::ActivateLikhi()
+    }
+    # Rapid switching: between two applications of different kinds (Notepad, and the Likhi window's
+    # WinForms "Try it here" box), and between Likhi and English several times in quick succession
+    # each round. After every round the language must really have changed, typing must come out
+    # right for that language, and both applications must still answer.
+    stress_switch = {
+        $app = Start-Process (Join-Path $likhiDir 'Likhi.exe') -PassThru
+        $deadline = (Get-Date).AddSeconds(15)
+        while ($app.MainWindowHandle -eq [IntPtr]::Zero -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200; $app.Refresh() }
+        $win = $app.MainWindowHandle
+        Expect-True 'Likhi window opened' ($win -ne [IntPtr]::Zero)
+        if ($win -eq [IntPtr]::Zero) { return }
+        # Windows Forms reports every control as a pane, so the box is found by its window class.
+        $box = [System.Windows.Automation.AutomationElement]::FromHandle($win).FindAll(
+            [System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) |
+            Where-Object { $_.Current.ClassName -like 'WindowsForms10.EDIT*' } | Select-Object -First 1
+        Expect-True 'found the Try it here box' ([bool]$box)
+        if (-not $box) { [void]$app.CloseMainWindow(); return }
+        $boxHwnd = [IntPtr]$box.Current.NativeWindowHandle
+        $boxText = { ([Wnd]::TextOf($boxHwnd) -replace "`r`n", "`n") }
+        # Focus by clicking into it: UI Automation cannot focus a Windows Forms pane.
+        $clickBox = { $r = $box.Current.BoundingRectangle; [Keys]::Click([int]($r.Left + $r.Width / 2), [int]($r.Top + $r.Height / 2)) }
+        Clear-Document
+        $fails = @(); $slowest = 0; $wrongLang = 0; $vanished = 0
+        # The input method is global by default: one Win+Space switches it for every application.
+        $bangla = $true
+        $rng = New-Object System.Random 7
+        foreach ($round in 1..30) {
+            $toNotepad = ($round % 2) -eq 1
+            $target = if ($toNotepad) { $script:notepad } else { $win }
+            if (-not [Keys]::Focus($target)) { $fails += "round ${round}: could not focus"; continue }
+            if (-not $toNotepad) { & $clickBox }
+            # A burst of 1 to 4 real Win+Space presses, 30 ms apart, straight after arriving.
+            $presses = $rng.Next(1, 5)
+            foreach ($i in 1..$presses) { [Keys]::WinSpace(); Start-Sleep -Milliseconds 30 }
+            if ($presses % 2) { $bangla = -not $bangla }
+            Start-Sleep -Milliseconds 150
+            $before = if ($toNotepad) { Text } else { & $boxText }
+            Send-Keys 'ami '
+            $after = if ($toNotepad) { Text } else { & $boxText }
+            $got = $after.Substring([math]::Min($before.Length, $after.Length))
+            $want = if ($bangla) { "$AMI " } else { 'ami ' }
+            $where = "round {0} ({1}, {2} presses, expecting {3})" -f $round, $(if ($toNotepad) { 'Notepad' } else { 'Likhi window' }), $presses, $(if ($bangla) { 'Likhi' } else { 'English' })
+            if ($got -ceq $want) { }
+            elseif ($got.Trim() -eq '') { $vanished++; $fails += "${where}: the typing vanished" }
+            elseif ($got -ceq "$AMI " -or $got -ceq 'ami ') { $wrongLang++; $fails += "${where}: came out in the other language: '$(Show $got)'"; $bangla = ($got -ceq "$AMI ") }
+            else { $tail = $after.Substring([math]::Max(0, $after.Length - 24)); $fails += "${where}: came out wrong: '$(Show $got)' (length $($before.Length) -> $($after.Length); ends '$(Show $tail)')" }
+            foreach ($h in $script:notepad, $win) {
+                $ms = [Wnd]::AnswersIn($h, 2000)
+                if ($ms -lt 0) { $fails += "round ${round}: an application stopped answering" } elseif ($ms -gt $slowest) { $slowest = $ms }
+            }
+        }
+        Expect-True "30 rounds, no failures ($(@($fails).Count) failed)" (@($fails).Count -eq 0)
+        Expect-True "language always switched ($wrongLang wrong)" ($wrongLang -eq 0)
+        Expect-True "typing never vanished ($vanished times)" ($vanished -eq 0)
+        Expect-True "applications kept answering (slowest $slowest ms)" ($slowest -lt 2000)
+        foreach ($f in $fails | Select-Object -First 12) { [void]$script:results.Add([pscustomobject]@{ Case = $script:current; Check = 'detail'; Pass = $false; Expected = ''; Got = $f }) }
+        [Ime]::ActivateLikhi()
+        [void]$app.CloseMainWindow()
     }
     # "Exit Likhi" from the tray menu, driven through the menu itself.
     tray_exit = {
