@@ -659,6 +659,26 @@ $cases = [ordered]@{
         }
         [Ime]::ActivateLikhi()
     }
+    # The Likhi window's own "Try it here" box, a classic Windows Forms edit control, with no
+    # switching at all: does typing reach the keyboard there?
+    likhi_window = {
+        $app = Start-Process (Join-Path $likhiDir 'Likhi.exe') -PassThru
+        $deadline = (Get-Date).AddSeconds(15)
+        while ($app.MainWindowHandle -eq [IntPtr]::Zero -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200; $app.Refresh() }
+        $win = $app.MainWindowHandle
+        $box = [System.Windows.Automation.AutomationElement]::FromHandle($win).FindAll(
+            [System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) |
+            Where-Object { $_.Current.ClassName -like 'WindowsForms10.EDIT*' } | Select-Object -First 1
+        $boxHwnd = [IntPtr]$box.Current.NativeWindowHandle
+        if (-not [Keys]::Focus($win)) { throw 'could not focus the Likhi window' }
+        $r = $box.Current.BoundingRectangle; [Keys]::Click([int]($r.Left + $r.Width / 2), [int]($r.Top + $r.Height / 2))
+        [Ime]::ActivateLikhi(); Start-Sleep -Milliseconds 800
+        Send-Keys 'ami '
+        Start-Sleep -Milliseconds 300
+        $got = [Wnd]::TextOf($boxHwnd)
+        [void]$script:results.Add([pscustomobject]@{ Case = $script:current; Check = 'text'; Pass = ($got -ceq "$AMI "); Expected = (Show "$AMI "); Got = (Show $got) })
+        [void]$app.CloseMainWindow()
+    }
     # Rapid switching: between two applications of different kinds (Notepad, and the Likhi window's
     # WinForms "Try it here" box), and between Likhi and English several times in quick succession
     # each round. After every round the language must really have changed, typing must come out
