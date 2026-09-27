@@ -26,7 +26,7 @@ $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
 
 $repo = Split-Path -Parent $PSScriptRoot
 $crate = Join-Path $repo 'shell'
-$icon = Join-Path $repo 'windows\pime\likhi\icon.ico'
+$icon = if (Test-Path (Join-Path $repo 'assets\icons\Likhi_icon.ico')) { Join-Path $repo 'assets\icons\Likhi_icon.ico' } else { Join-Path $repo 'windows\pime\likhi\icon.ico' }
 $profileDir = Join-Path $env:LOCALAPPDATA 'Likhi\shell'
 $clsid = '{1D24C804-FAD0-4B32-AEDD-1317F4E6221E}'
 

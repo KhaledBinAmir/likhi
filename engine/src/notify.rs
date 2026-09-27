@@ -91,6 +91,37 @@ fn app_dir() -> Option<std::path::PathBuf> {
     std::env::current_exe().ok()?.parent()?.parent().map(|p| p.to_path_buf())
 }
 
+/// Find the icon file to show in the system tray. Checks installed layout, then repository
+/// and asset locations so development and standalone runs still carry the proper icon.
+fn find_icon_file() -> Option<std::path::PathBuf> {
+    if let Some(a) = app_dir() {
+        if let Some(p) = ["x64", "arm64", "x86"]
+            .iter()
+            .map(|arch| a.join("shell").join(arch).join("likhi.ico"))
+            .find(|p| p.exists())
+        {
+            return Some(p);
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        let mut cur = exe.parent();
+        while let Some(dir) = cur {
+            let candidates = [
+                dir.join("assets").join("icons").join("Likhi_icon.ico"),
+                dir.join("dist").join("shell").join("x64").join("likhi.ico"),
+                dir.join("windows").join("pime").join("likhi").join("icon.ico"),
+            ];
+            for c in candidates {
+                if c.exists() {
+                    return Some(c);
+                }
+            }
+            cur = dir.parent();
+        }
+    }
+    None
+}
+
 /// The Likhi icon the installer puts beside the text service; Windows' information icon if it is
 /// missing, so a moved file never costs the tray icon itself.
 ///
@@ -104,14 +135,7 @@ fn load_icon() -> HICON {
         }
     }
     let (cx, cy) = unsafe { (GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON)) };
-    // Whichever architecture's copy this installation has: an ARM64 machine may carry no x64 one.
-    let icon = app_dir()
-        .and_then(|a| {
-            ["x64", "arm64", "x86"]
-                .iter()
-                .map(|arch| a.join("shell").join(arch).join("likhi.ico"))
-                .find(|p| p.exists())
-        })
+    let icon = find_icon_file()
         .and_then(|p| {
             let wide: Vec<u16> = p.to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect();
             unsafe { LoadImageW(None, PCWSTR(wide.as_ptr()), IMAGE_ICON, cx, cy, LR_LOADFROMFILE) }

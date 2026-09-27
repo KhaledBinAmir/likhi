@@ -21,7 +21,11 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 CRATE = REPO / "shell"
-ICON = REPO / "windows" / "pime" / "likhi" / "icon.ico"
+ICON = (
+    (REPO / "assets" / "icons" / "Likhi_icon.ico")
+    if (REPO / "assets" / "icons" / "Likhi_icon.ico").exists()
+    else (REPO / "windows" / "pime" / "likhi" / "icon.ico")
+)
 
 TARGETS = {
     "x64": "x86_64-pc-windows-msvc",
