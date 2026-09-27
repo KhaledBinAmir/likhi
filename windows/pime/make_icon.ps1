@@ -18,6 +18,26 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# If the official SVG icon exists, render it using scripts\make_icon.py
+$repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
+$svgIcon = Join-Path $repo 'assets\icons\Likhi_icon.svg'
+$makeIconPy = Join-Path $repo 'scripts\make_icon.py'
+if ((Test-Path $svgIcon) -and (Test-Path $makeIconPy)) {
+    $python = (Get-Command python -ErrorAction SilentlyContinue).Source
+    if ($python) {
+        & $python $makeIconPy
+        $builtIco = Join-Path $repo 'windows\pime\likhi\icon.ico'
+        if (Test-Path $builtIco) {
+            if ((Resolve-Path $Out -ErrorAction SilentlyContinue).Path -ne (Resolve-Path $builtIco).Path) {
+                Copy-Item $builtIco $Out -Force
+            }
+            Write-Host "Generated icon from $svgIcon -> $Out"
+            return
+        }
+    }
+}
+
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Windows.Forms
 

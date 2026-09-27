@@ -18,7 +18,11 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 SOURCE = REPO / "app" / "LikhiApp.cs"
-ICON = REPO / "windows" / "pime" / "likhi" / "icon.ico"
+ICON = (
+    (REPO / "assets" / "icons" / "Likhi_icon.ico")
+    if (REPO / "assets" / "icons" / "Likhi_icon.ico").exists()
+    else (REPO / "windows" / "pime" / "likhi" / "icon.ico")
+)
 
 
 def find_csc() -> Path:
