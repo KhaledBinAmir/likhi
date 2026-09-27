@@ -108,7 +108,6 @@ fn find_icon_file() -> Option<std::path::PathBuf> {
         while let Some(dir) = cur {
             let candidates = [
                 dir.join("assets").join("icons").join("Likhi_icon.ico"),
-                dir.join("assets").join("icons").join("likhi.ico"),
                 dir.join("dist").join("shell").join("x64").join("likhi.ico"),
                 dir.join("windows").join("pime").join("likhi").join("icon.ico"),
             ];

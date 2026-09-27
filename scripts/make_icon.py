@@ -4,6 +4,11 @@ Generates icon frames for 16, 20, 24, 32, 48, 64, 128, and 256 pixels.
 Matches Windows standard ICO structure:
   - 16..48 px: uncompressed 32bpp BGRA DIB with BITMAPINFOHEADER (expected by GDI LoadImageW)
   - 64..256 px: PNG compressed
+
+Run only when the logo changes; the .ico files it writes are committed, so an ordinary build needs
+neither of its requirements -- Pillow, and Microsoft Edge, which renders the SVG headless:
+
+    uv run --with pillow python scripts/make_icon.py
 """
 
 from __future__ import annotations
@@ -186,7 +191,6 @@ def main() -> None:
         dest_paths = [
             REPO / "windows" / "pime" / "likhi" / "icon.ico",
             REPO / "assets" / "icons" / "Likhi_icon.ico",
-            REPO / "assets" / "icons" / "likhi.ico",
         ]
 
         # If dist has shell directories, update them too
