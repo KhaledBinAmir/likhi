@@ -31,7 +31,73 @@ namespace Likhi
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm());
+            
+            if (!Env.EngineRunning())
+            {
+                Env.StartEngine();
+                Application.Run(new SplashForm());
+            }
+            else
+            {
+                Application.Run(new MainForm());
+            }
+        }
+    }
+
+    class SplashForm : Form
+    {
+        private Timer fadeTimer;
+        private Image splashImage;
+
+        public SplashForm()
+        {
+            this.FormBorderStyle = FormBorderStyle.None;
+            this.StartPosition = FormStartPosition.CenterScreen;
+            this.ShowInTaskbar = false;
+            this.TopMost = true;
+            this.BackColor = Color.Magenta;
+            this.TransparencyKey = Color.Magenta;
+
+            using (Stream s = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("likhi_splash_v1.png"))
+            {
+                if (s != null)
+                {
+                    splashImage = Image.FromStream(s);
+                    int w = (int)(Screen.PrimaryScreen.Bounds.Width * 0.4);
+                    int h = (int)((float)w / splashImage.Width * splashImage.Height);
+                    this.Size = new Size(w, h);
+                }
+            }
+
+            Timer delayTimer = new Timer();
+            delayTimer.Interval = 5000;
+            delayTimer.Tick += delegate {
+                delayTimer.Stop();
+                fadeTimer = new Timer();
+                fadeTimer.Interval = 16;
+                fadeTimer.Tick += delegate {
+                    if (this.Opacity > 0)
+                        this.Opacity -= 0.015;
+                    else
+                    {
+                        fadeTimer.Stop();
+                        this.Close();
+                    }
+                };
+                fadeTimer.Start();
+            };
+            delayTimer.Start();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            if (splashImage != null)
+            {
+                e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+                e.Graphics.DrawImage(splashImage, 0, 0, this.Width, this.Height);
+            }
         }
     }
 
