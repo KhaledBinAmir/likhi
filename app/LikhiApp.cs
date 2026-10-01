@@ -47,37 +47,66 @@ namespace Likhi
     class SplashForm : Form
     {
         private Timer fadeTimer;
-        private Image splashImage;
+        private WebBrowser webBrowser;
 
         public SplashForm()
         {
             this.FormBorderStyle = FormBorderStyle.None;
-            this.StartPosition = FormStartPosition.CenterScreen;
             this.ShowInTaskbar = false;
             this.TopMost = true;
             this.BackColor = Color.Magenta;
             this.TransparencyKey = Color.Magenta;
 
-            using (Stream s = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("likhi_splash_v1.png"))
+            webBrowser = new WebBrowser();
+            webBrowser.ScrollBarsEnabled = false;
+            webBrowser.IsWebBrowserContextMenuEnabled = false;
+            webBrowser.AllowWebBrowserDrop = false;
+            webBrowser.Dock = DockStyle.Fill;
+            this.Controls.Add(webBrowser);
+
+            string svgContent = "";
+            using (Stream s = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("likhi_splash_v1.svg"))
             {
                 if (s != null)
                 {
-                    splashImage = Image.FromStream(s);
-                    int w = (int)(Screen.PrimaryScreen.Bounds.Width * 0.4);
-                    int h = (int)((float)w / splashImage.Width * splashImage.Height);
-                    this.Size = new Size(w, h);
+                    using (StreamReader reader = new StreamReader(s))
+                    {
+                        svgContent = reader.ReadToEnd();
+                    }
                 }
             }
+
+            string html = @"<!DOCTYPE html>
+<html>
+<head>
+<meta http-equiv=""X-UA-Compatible"" content=""IE=edge"">
+<style>
+body { background-color: #FF00FF; margin: 0; padding: 0; overflow: hidden; }
+svg { width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>" + svgContent + @"</body>
+</html>";
+
+            webBrowser.DocumentText = html;
+
+            int w = (int)(Screen.PrimaryScreen.Bounds.Width * 0.4);
+            int h = (int)((float)w / 1514f * 900f);
+            this.Size = new Size(w, h);
+
+            this.StartPosition = FormStartPosition.Manual;
+            this.Left = Screen.PrimaryScreen.Bounds.X + (Screen.PrimaryScreen.Bounds.Width - w) / 2;
+            this.Top = Screen.PrimaryScreen.Bounds.Y + (Screen.PrimaryScreen.Bounds.Height - h) / 2;
 
             Timer delayTimer = new Timer();
             delayTimer.Interval = 5000;
             delayTimer.Tick += delegate {
                 delayTimer.Stop();
                 fadeTimer = new Timer();
-                fadeTimer.Interval = 16;
+                fadeTimer.Interval = 10;
                 fadeTimer.Tick += delegate {
                     if (this.Opacity > 0)
-                        this.Opacity -= 0.015;
+                        this.Opacity -= 0.01;
                     else
                     {
                         fadeTimer.Stop();
@@ -87,17 +116,6 @@ namespace Likhi
                 fadeTimer.Start();
             };
             delayTimer.Start();
-        }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            base.OnPaint(e);
-            if (splashImage != null)
-            {
-                e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
-                e.Graphics.DrawImage(splashImage, 0, 0, this.Width, this.Height);
-            }
         }
     }
 
