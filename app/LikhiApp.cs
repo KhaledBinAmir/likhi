@@ -556,7 +556,7 @@ namespace Likhi
                 "3.   Space or Enter accepts the highlighted word.",
                 "4.   Press 1–5 to pick a different one, or ← → to move.",
                 "5.   F12 switches to plain English without leaving Bangla mode.",
-                "6.   Tab takes Likhi's guess, marked Tab in the list: the word you are typing, or the next one."
+                "6.   Tab takes Likhi's guess, marked Tab in the list."
             };
             foreach (string s in steps) { Body(s, 24, y, Fg, "Nirmala UI", 22); y += 24; }
             y += 14;

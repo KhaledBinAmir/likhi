@@ -13,13 +13,19 @@
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\type_test.ps1
 #   ... -Case basic,predict_tab      # only these
+#   ... -Shots docs\images           # the README's screenshots instead of the checks
+#
+# The screenshots are taken the same way, with everything put back the same way: each is cropped
+# to Notepad's text area and Likhi's list (or to the Likhi window), so nothing else on the screen --
+# other tabs, the taskbar, the desktop -- can end up in them.
 #
 # ASCII only, Bengali written as \u escapes: Windows PowerShell reads a file without a byte-order
 # mark as the ANSI code page, and the repository does not allow byte-order marks.
 
 param(
     [string[]]$Case = @(),
-    [int]$KeyDelayMs = 45
+    [int]$KeyDelayMs = 45,
+    [string]$Shots = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -104,6 +110,10 @@ public static class Keys
     }
 
     [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+
+    // The mouse moved out of the way, without a click: left over the taskbar, it pops up previews
+    // of other windows over whatever is being captured.
+    public static void Park(int x, int y) { SetCursorPos(x, y); }
     [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
 
     // UI Automation reports positions in physical pixels; a click from a thread that is not DPI
@@ -281,21 +291,36 @@ public static class Wnd
     }
 
     // Whether a Likhi candidate window is on screen in the process that owns `hwnd`.
-    public static bool CandidatesVisible(IntPtr hwnd) { return OwnVisible(hwnd, "LikhiCandidateWindow"); }
+    public static bool CandidatesVisible(IntPtr hwnd) { return CandidateWindow(hwnd) != IntPtr.Zero; }
 
+    // That candidate window, or zero.
+    public static IntPtr CandidateWindow(IntPtr hwnd) { return OwnVisible(hwnd, "LikhiCandidateWindow"); }
 
-    static bool OwnVisible(IntPtr hwnd, string cls)
+    static IntPtr OwnVisible(IntPtr hwnd, string cls)
     {
         uint owner; GetWindowThreadProcessId(hwnd, out owner);
-        bool shown = false;
+        IntPtr shown = IntPtr.Zero;
         EnumWindows(delegate (IntPtr h, IntPtr l)
         {
             var c = new StringBuilder(256); GetClassName(h, c, 256);
             uint pid; GetWindowThreadProcessId(h, out pid);
-            if (c.ToString() == cls && IsWindowVisible(h) && pid == owner) { shown = true; return false; }
+            if (c.ToString() == cls && IsWindowVisible(h) && pid == owner) { shown = h; return false; }
             return true;
         }, IntPtr.Zero);
         return shown;
+    }
+
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int attr, out RECT r, int size);
+
+    // A window's visible bounds in physical pixels: the frame Windows draws, without the invisible
+    // resize border GetWindowRect includes (DWMWA_EXTENDED_FRAME_BOUNDS).
+    public static int[] Bounds(IntPtr h)
+    {
+        RECT r;
+        if (DwmGetWindowAttribute(h, 9, out r, Marshal.SizeOf(typeof(RECT))) != 0) GetWindowRect(h, out r);
+        return new int[] { r.Left, r.Top, r.Right, r.Bottom };
     }
 }
 '@
@@ -830,6 +855,78 @@ $cases = [ordered]@{
     }
 }
 
+# ------------------------------------------------------------------------------------ screenshots
+
+Add-Type -AssemblyName System.Drawing
+
+# The screen between (left, top) and (right, bottom), physical pixels, as `name`.png in $Shots.
+function Save-Shot([int]$left, [int]$top, [int]$right, [int]$bottom, [string]$name) {
+    $w = $right - $left; $h = $bottom - $top
+    if ($w -le 0 -or $h -le 0) { throw "nothing to capture for $name" }
+    $bmp = New-Object System.Drawing.Bitmap $w, $h
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    try {
+        $g.CopyFromScreen($left, $top, 0, 0, (New-Object System.Drawing.Size $w, $h))
+        $bmp.Save((Join-Path $Shots "$name.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+    } finally { $g.Dispose(); $bmp.Dispose() }
+}
+
+# Type `keys` into Notepad and capture the text with Likhi's list under it: from the top left of
+# the document area to just past the list. Only the document area, never the title bar or tabs.
+function Shot-Typing([string]$keys, [string]$name, [int]$settleMs = 1500) {
+    Clear-Document
+    Send-Keys $keys
+    Start-Sleep -Milliseconds $settleMs
+    Focus-Notepad
+    $cand = [Wnd]::CandidateWindow($script:notepad)
+    if ($cand -eq [IntPtr]::Zero) { throw "no list on screen for $name" }
+    $c = [Wnd]::Bounds($cand)
+    $root = [System.Windows.Automation.AutomationElement]::FromHandle($script:notepad)
+    $cond = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::Document)
+    $d = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond).Current.BoundingRectangle
+    $left = [int]$d.Left; $top = [int]$d.Top
+    $right = [int][math]::Min($d.Right, [math]::Max($c[2] + 40, $d.Left + 560))
+    $bottom = [int][math]::Min($d.Bottom, $c[3] + 32)
+    Save-Shot $left $top $right $bottom $name
+}
+
+$shotScenes = [ordered]@{
+    # An ordinary word: what was typed, read as Bangla, with the alternatives under it and the
+    # typed English last.
+    typing = { Shot-Typing 'amar sonar bangl' 'typing' }
+    # The next word begun: the model's guess in the list, marked Tab.
+    tab_guess = { $g = Guessable; Shot-Typing "$($g.Roman) $($g.Letters)" 'tab-guess' }
+    # After Space: the next word, offered when the model is sure.
+    next_word = { $w = Predictable; Shot-Typing "$($w.Roman) " 'next-word' }
+    # The Likhi window, with Bangla typed into its "Try it here" box.
+    window = {
+        $app = Start-Process (Join-Path $likhiDir 'Likhi.exe') -PassThru
+        $deadline = (Get-Date).AddSeconds(15)
+        while ($app.MainWindowHandle -eq [IntPtr]::Zero -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200; $app.Refresh() }
+        $win = $app.MainWindowHandle
+        Wait-Settled $win
+        try {
+            $box = [System.Windows.Automation.AutomationElement]::FromHandle($win).FindAll(
+                [System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) |
+                Where-Object { $_.Current.ClassName -like 'WindowsForms10.EDIT*' } | Select-Object -First 1
+            $boxHwnd = [IntPtr]$box.Current.NativeWindowHandle
+            if (-not [Keys]::Focus($win)) { throw 'could not focus the Likhi window' }
+            if (-not (Click-Into $box $boxHwnd)) { throw 'could not click into the Try it here box' }
+            [Ime]::ActivateLikhi(); Start-Sleep -Milliseconds 800
+            Send-Keys 'ami banglay likhi '
+            $b = [Wnd]::Bounds($win)
+            [Keys]::Park($b[2] - 60, $b[1] + 70)
+            Start-Sleep -Milliseconds 800
+            # Down to just under the "Try it here" box: the settings below it are the person's own,
+            # and the run has switched usage reporting off.
+            $boxBottom = [int]$box.Current.BoundingRectangle.Bottom
+            Save-Shot $b[0] $b[1] $b[2] ([math]::Min($b[3], $boxBottom + 16)) 'likhi-window'
+        } finally { [void]$app.CloseMainWindow() }
+    }
+}
+
 # ------------------------------------------------------------------------------------------ run
 
 [Keys]::DpiAware()
@@ -857,12 +954,22 @@ try {
     [Ime]::ActivateLikhi()
     Start-Sleep -Milliseconds 400
 
-    $names = if ($Case.Count) { $Case } else { @($cases.Keys) }
-    foreach ($name in $names) {
-        if (-not $cases.Contains($name)) { throw "no case named $name" }
-        $script:current = $name
-        try { & $cases[$name] }
-        catch { [void]$script:results.Add([pscustomobject]@{ Case = $name; Check = 'ran'; Pass = $false; Expected = ''; Got = "$_" }) }
+    if ($Shots) {
+        New-Item -ItemType Directory -Force $Shots | Out-Null
+        $Shots = (Resolve-Path $Shots).Path
+        foreach ($name in @($shotScenes.Keys)) {
+            $script:current = $name
+            try { & $shotScenes[$name]; [void]$script:results.Add([pscustomobject]@{ Case = $name; Check = 'screenshot'; Pass = $true; Expected = ''; Got = '' }) }
+            catch { [void]$script:results.Add([pscustomobject]@{ Case = $name; Check = 'screenshot'; Pass = $false; Expected = ''; Got = "$_" }) }
+        }
+    } else {
+        $names = if ($Case.Count) { $Case } else { @($cases.Keys) }
+        foreach ($name in $names) {
+            if (-not $cases.Contains($name)) { throw "no case named $name" }
+            $script:current = $name
+            try { & $cases[$name] }
+            catch { [void]$script:results.Add([pscustomobject]@{ Case = $name; Check = 'ran'; Pass = $false; Expected = ''; Got = "$_" }) }
+        }
     }
 }
 finally {

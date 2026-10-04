@@ -1,83 +1,110 @@
-# Likhi (লিখি)
+<p align="center">
+  <img src="assets/icons/Likhi_icon.svg" width="112" alt="Likhi logo">
+</p>
 
-**A Gboard-style Bangla phonetic input method for Windows.** Type Bangla the way you already
-romanize it in chat, with no spelling rules to learn, and get the right word first, correctly
-spelt, with a few alternatives you can pick with a key. It reads the sentence you are writing,
-guesses the next word, learns from you, runs on your own machine, and works in every app through
-the Windows Text Services Framework.
+<h1 align="center">Likhi (লিখি)</h1>
 
-> Status: **in pilot.** There is an installer, and the keyboard works system-wide including Store
-> applications. Since 0.6.0 it runs Likhi's own model, trained for this keyboard. Suggestion
-> quality is still being tuned on real typing. See [docs/PLAN.md](docs/PLAN.md) and
-> [docs/STATUS.md](docs/STATUS.md).
+<p align="center">
+  <b>Type Bangla the way you type it in chat.</b><br>
+  চ্যাটে যেভাবে লেখেন, সেভাবেই বাংলা লিখুন।
+</p>
 
-## Why
+<p align="center">
+  <a href="https://github.com/KhaledBinAmir/likhi/releases"><img src="https://img.shields.io/badge/Download-for%20Windows-1a7f37?style=for-the-badge" alt="Download for Windows"></a>
+</p>
 
-Every existing Windows option (Avro Keyboard, Microsoft's Bangla Phonetic IME, Borno) is
-rule-based: you must know the exact roman spelling convention, case rules, and conjunct tricks.
-Type "amr", "aamar", "korci", or "jonne" and they produce the wrong word or nothing sensible.
-Gboard and the macOS Bangla transliteration keyboard just understand you. Likhi brings that
-experience to the Windows desktop, as open source.
+<p align="center">
+  <img src="docs/images/typing.png" alt="Typing 'amar sonar bangl' in Notepad: Likhi shows আমার সোনার and suggests বাংলা, বাংলায়, ব্যাংক, বাঙালি, with the English 'bangl' last">
+</p>
 
-## What it will do
+Likhi is a free Bangla keyboard for Windows. Type a word the way it sounds, `amar`, `amr` or
+`aamar`, and Likhi writes **আমার**. There are no spelling rules to learn and no special keys to
+remember. If the first suggestion isn't the word you meant, the right one is usually just below
+it, a number key away.
 
-- Loose, case-insensitive romanization: `amr`, `amar`, `aamar` all give আমার first.
-- Top suggestion right the vast majority of the time; 2 to 4 alternatives selectable by number
-  keys or arrows. Space or Enter commits the first.
-- Reads the sentence: the words before the one you are typing help choose it, so the same letters
-  can give a different word in a different sentence.
-- Correct spelling first: chat is full of misspellings (হইসে for হয়েছে), and Likhi prefers the
-  correctly spelt word: 97% of first suggestions on held-out chat are correctly spelt.
-- Reasonable output for words it has never seen: names, slang, English loanwords in Bangla script.
-- Learns from you: keep picking the second suggestion and it becomes the first.
-- Guesses the word you are typing and the next one: its surest guess is marked **Tab** in the list,
-  and Tab takes it. After Space the same guess is offered for the next word. A guess is shown only
-  when it is right about two times in three, and it is never misspelt. Space always takes the first
-  reading of what you actually typed, so a guess is never inserted unless you ask for it.
-- Tab, Enter, Space, punctuation, Delete, Home, Ctrl combinations -- any key that ends a word commits
-  the highlighted suggestion first, then does its usual job.
-- An icon beside the clock: open Likhi, check for updates, or exit. Exiting lasts until Likhi is
-  opened again or the next sign-in, and while it is exited the keyboard types plain English.
-- System-wide: Chrome, VS Code, WhatsApp, Word, Slack, Windows Terminal.
-- Imperceptible latency; everything runs locally on a normal laptop CPU.
-- Quick Bangla/English toggle, English passthrough for words you clearly mean as English.
-- Bangla punctuation (।) and numerals handled sensibly, Western numerals optional.
-- Learning data stays on your machine, and the personal dictionary is exportable.
-- Usage reporting is **on by default** during the pilot and is turned off in one click. It never
-  sends anything you type successfully. See [Privacy](#privacy).
+It works everywhere you type: Chrome, Facebook, WhatsApp, Telegram, Word, the Windows search box,
+and the rest.
 
-## How it works (short)
+> **Likhi is in its pilot phase.** It already works well for everyday typing, and it gets better
+> with every update. Updates arrive automatically.
 
-Likhi follows the recipe behind Gboard's transliteration keyboards: a model that has learned from
-real human romanizations, combined with a Bangla word lexicon, a spelling list, and a personal
-model that learns from your choices. Details, sources, and the accuracy targets are in
-[docs/PLAN.md](docs/PLAN.md) and [docs/research](docs/research).
+## Why people like it
 
-**The Likhi model** (since 0.6.0) is one small network, built for Likhi, that does three jobs. It
-reads the words before the one you are typing and the letters you typed, and
+- **Type it however you like.** `amar`, `amr`, `aamar` and `AMAR` all give আমার. Likhi
+  understands loose spellings, short forms and slang.
+- **The right word, spelt correctly.** Chat is full of misspellings, and many keyboards copy them.
+  Likhi prefers the correct spelling: on real chat, 97% of its first suggestions are correctly
+  spelt.
+- **It reads your sentence.** The words you have already typed help Likhi pick the next one, so the
+  same letters can give a different word in a different sentence.
+- **It guesses the next word.** When Likhi is confident, it offers the word you are about to type,
+  marked **Tab**. Press Tab to take it, or just keep typing.
+- **English stays English.** What you typed, in English letters, is always the last suggestion, so
+  you can mix English words in without switching keyboards.
+- **It learns from you.** Pick the same word a few times and Likhi puts it first.
+- **Fast and private.** Likhi runs on your own PC and works offline. What you write is never
+  uploaded; the one thing that is, during the pilot, is explained under [Your privacy](#your-privacy)
+  and turned off in one click.
+- **Free and open source.**
 
-- *transliterates* them: what you typed, as Bangla, in this sentence;
-- *completes* them: the word they are the beginning of;
-- *predicts the next word*.
+<p align="center">
+  <img src="docs/images/tab-guess.png" alt="After ভালো, typing 'e' shows এ, ই, এই, and একটা marked Tab, with the English 'e' last"><br>
+  <sub>Typing the next word: Likhi's guess, <b>একটা</b>, is marked Tab.</sub>
+</p>
 
-It replaces two models: IndicXlit, which transliterated a word alone, and a separate next-word
-model. On held-out text it gets the first
-suggestion right more often than 0.5's engine (76.1% against 71.1% on the Dakshina word list), and it
-runs in 41 ms per word instead of 68, behind the typing rather than in its way: a keystroke only
-ever waits for the tables, about half a millisecond.
+<p align="center">
+  <img src="docs/images/next-word.png" alt="After typing আমার মনে and a space, Likhi offers হয় marked Tab"><br>
+  <sub>After a space: Likhi offers the word that usually comes next. Tab types it.</sub>
+</p>
 
-```
-keystroke -> TSF text service (a DLL, loaded into the app) -> engine (one background process)
-             engine: normalize -> candidates (lexicon index | Likhi model | rule literal | raw Latin)
-                     -> rank (model score x lexicon x spelling x personal history) -> top 5
-             after each word: the Likhi model's next-word guess, shown as Tab when it is sure
-```
+## Get started
 
-The text service and the engine talk over a named pipe, with a local socket as a fallback. The pipe
-is what lets Store applications work: they run in an AppContainer, which cannot open a loopback
-socket at all.
+1. **Download** the newest `LikhiSetup` file from the
+   [Releases page](https://github.com/KhaledBinAmir/likhi/releases) and open it.
+   - If Windows says **"Windows protected your PC"**, click **More info**, then **Run anyway**.
+     Windows shows this for programs it doesn't know yet (see the [questions](#questions) below).
+   - Windows will ask for permission to install. Likhi needs it once, to add the keyboard.
+2. **Switch to Likhi:** press **Win + Space** and choose **Bangla (Bangladesh) — Likhi**.
+3. **Type!** Write a word the way it sounds and press **Space**.
 
-## Privacy
+Likhi needs Windows 10 (May 2019 update or newer) or Windows 11, 64-bit.
+
+## How to type
+
+| Key | What it does |
+|---|---|
+| **Space** or **Enter** | Types the highlighted word |
+| **1** to **5** | Picks a different suggestion |
+| **←** and **→** | Moves between suggestions |
+| **Tab** | Takes Likhi's guess, the suggestion marked **Tab** |
+| **F12** | Switches to plain English and back, without leaving Likhi |
+| **Win + Space** | Switches between Likhi and your other keyboards |
+
+Open **Likhi** from the Start menu to see these tips, try typing, and change the settings: the
+suggestion font and size, whether Likhi guesses words, and whether it starts when you sign in.
+
+<p align="center">
+  <img src="docs/images/likhi-window.png" alt="The Likhi window: how to type Bangla, the suggestion font, and a 'Try it here' box with আমি বাংলায় লিখি typed in it">
+</p>
+
+The Likhi icon by the clock lets you open Likhi, check for updates, or exit. If you exit, the
+keyboard types plain English until you open Likhi again or sign in next time.
+
+## Your privacy
+
+Likhi sees what you type, as every keyboard does, so here is exactly what happens to it.
+
+- **What you write stays on your PC.** Your messages and documents, and what Likhi learns from
+  you, are never uploaded.
+- **Usage reporting is on during the pilot**, to help make Likhi better. It sends counts (for
+  example, how often the first suggestion was the right one), plus single words where Likhi's first
+  suggestion was *wrong*: what you typed, and the word you picked instead. It never sends numbers,
+  email addresses, web addresses, or anything typed into a password box.
+- **You can turn it off** in one click: open **Likhi** from the Start menu and clear **"Share
+  anonymous usage data to improve suggestions"**.
+
+<details>
+<summary><b>The full details</b></summary>
 
 Likhi is an input method, so it sees everything you type. What it does with that is worth being
 exact about.
@@ -104,9 +131,9 @@ finer than the hour, and the machine is identified by a random installation id a
 
 **To turn it off:** open **Likhi** from the Start menu and clear **"Share anonymous usage data to
 improve suggestions"**. That writes a per-user setting, so it needs no administrator and does not
-decide for anyone else sharing the machine. To see exactly what is held before deciding, the files are plain JSON Lines in
-`%LOCALAPPDATA%\Likhi` (`metrics.jsonl` and `events.jsonl`) and can be read in Notepad; deleting
-them is enough to erase them.
+decide for anyone else sharing the machine. To see exactly what is held before deciding, the files
+are plain JSON Lines in `%LOCALAPPDATA%\Likhi` (`metrics.jsonl` and `events.jsonl`) and can be read
+in Notepad; deleting them is enough to erase them.
 
 The reason it defaults to on: this is a pilot, and the struggle words are the only honest signal for
 which words the engine gets wrong. They become the test set every later change is measured against.
@@ -121,153 +148,45 @@ An update is only offered after two checks: the release is signed by a key that 
 publisher's machine, and the installer matches exactly what that signature describes. Anything else
 is refused. Nothing installs until you click the notification, and Windows asks for permission.
 
-## Repository layout
+</details>
 
-```
-engine/             the engine: Rust, one binary, no interpreter
-shell/              the Windows text service: Rust, a TSF DLL for each architecture
-app/                the settings window (C#, WinForms)
-installer/          Inno Setup script and the keyboard setup scripts
+## Questions
 
-server/             the telemetry ingest service (Python, runs in a container)
-scripts/            dataset download, model conversion, builds
-tests/goldens/      recorded behaviour the engine must reproduce
-docs/               plan, research notes, design decisions
-data/               datasets (raw/processed are git-ignored; see scripts/fetch_datasets.py)
-results/            evaluation results tracked over time
-```
+**Windows says "Windows protected your PC". Is Likhi safe?**
+That warning appears for programs Windows hasn't seen many people download yet, and Likhi isn't
+signed with a paid Windows certificate yet. Click **More info**, then **Run anyway**. Every Likhi
+update is checked against our own signature before it is offered, and the code is all here for
+anyone to read.
 
-Everything that runs on someone's machine is Rust: the engine, the text service, the lexicon
-builder, the evaluation harness, the tuner, the stress tool and the telemetry operator tool. What
-is left in Python is the ingest service, which runs in a container rather than on a machine, and
-the scripts that prepare data on a developer's machine.
+**How do I update?**
+You don't need to do anything. Likhi checks once a day and shows a notification when an update is
+ready. Click it to install.
 
-It began as a Python engine with a Rust port beside it. Each tool was moved only once it produced
-the same numbers as the one it replaced, and the Python was deleted after the last of them did.
-`engine/tests/goldens.rs` replays 96,537 of the original's recorded results and requires the engine
-to return the same thing. Those files cannot be regenerated, which is deliberate: they are a fixed
-record of behaviour that a second implementation once agreed with, so a change that moves them has
-to be argued for rather than re-recorded away.
+**Does it work without the internet?**
+Yes. Typing works completely offline. The internet is only used for update checks and, if you leave
+it on, usage reporting.
 
-## Development
+**How do I remove it?**
+Open **Settings → Apps → Installed apps**, find **Likhi (Bangla phonetic keyboard)**, and choose
+**Uninstall**.
 
-The engine and shell need the Rust toolchain and the Visual Studio Build Tools C++ workload.
-Preparing data and running the builds needs Python 3.12 and [uv](https://docs.astral.sh/uv/).
+**Something went wrong, or a word keeps coming out wrong?**
+Please tell us on the [Issues page](https://github.com/KhaledBinAmir/likhi/issues). Include what you
+typed, what you expected, and what you got.
 
-```
-cd engine && cargo test --release --features tools    # the engine's own tests and the goldens
-uv sync --all-extras
-uv run python scripts/fetch_datasets.py --all         # datasets + IndicXlit checkpoint
-uv run python scripts/convert_indicxlit.py --src data/raw/indicxlit --npz models/indicxlit-np
-uv run pytest                                         # ingest service, key map, file encodings
-```
+## For developers
 
-Building the data the engine loads:
+Likhi is a Rust engine and Windows text service, with a small C# settings window and an Inno Setup
+installer. Building, testing, measuring and releasing are described in
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). The plan and research notes are in
+[docs/PLAN.md](docs/PLAN.md) and [docs/research](docs/research).
 
-```
-cd engine
-cargo run --release --features tools --bin likhi-lexicon -- \
-    --raw ../data/raw --out ../models/rust/lexicon      # unigrams, romanizations, keys, bigrams
-cd ..
-uv run python scripts/build_rust_data.py               # model weights and the Avro rules
-```
+## Credits and licences
 
-The lexicon builder writes the `.lkx` tables directly. It refuses to run without `weights.json`,
-the tuned ranker weights produced by `likhi-tune`: they are not a build output, and a lexicon
-missing them costs about seven points of top-1 silently.
+Likhi is made by [Khaled Bin Amir](https://github.com/KhaledBinAmir). The logo is by
+[Azmain Riad](https://github.com/azmainriad).
 
-`build_rust_data.py` converts IndicXlit (the model before 0.6.0, still read when no Likhi model is
-installed) and the Avro rule tables, and stays in Python because its sources are a NumPy `.npz` and
-a Python module. It runs once per model, on a developer machine, and its output is what the engine
-maps.
-
-The Likhi model, in `models/rust/likhi`, is built separately and is not reproduced from this
-repository. `LIKHI_MODEL=<model dir> cargo test --release --test likhimodel` checks that the engine
-computes exactly the reference answers that come with a model, and that its 8-bit word table changes
-nothing that matters.
-
-Measuring and tuning, which is where ranking work happens:
-
-```
-cd engine
-cargo build --release --features tools
-
-# accuracy: ~2 minutes across all cores
-target/release/likhi-eval words --dataset dakshina-dev
-
-# in context, as typed: every chat word after the words before it, with how often the first
-# choice is correctly spelt
-target/release/likhi-eval context --dataset banglatlit-val
-
-# the next-word and Tab guess, exactly as the keyboard asks for it
-target/release/likhi-eval predict --dataset banglatlit-val --model ../models/rust/likhi
-
-# ranker weights: cache features once, then search over weights in seconds
-target/release/likhi-tune cache  --dataset dakshina-dev --dataset banglatlit-val-words
-target/release/likhi-tune search --metric top1
-```
-
-`likhi-tune search` refuses to overwrite an existing `weights.json` from a small cache. Those
-weights are worth roughly seven points of top-1, and a search over a few hundred items will happily
-produce worse ones; use `--out` to write elsewhere while experimenting.
-
-Building what ships:
-
-```
-cd engine && cargo test --release --features tools   # including the goldens
-cd ..
-uv run python scripts/build_engine.py       # dist/engine
-uv run python scripts/build_shell.py        # dist/shell (x64 and x86)
-uv run python scripts/build_app.py          # dist/Likhi.exe
-ISCC.exe installer/likhi.iss                # dist/LikhiSetup-<version>.exe
-```
-
-Baselines and results live in `results/` and are summarized by `likhi-eval report`.
-
-### Publishing a release
-
-**Since 0.5.0, publishing a release is shipping it.** Every installation checks once a day, and a
-release that carries a signed manifest is offered to all of them. So a release is published only
-when it is meant for everyone, and a test build is never uploaded with a manifest.
-
-```
-# 0. test the installed build for real: types into Notepad through the actual keyboard for about
-#    four minutes -- leave the machine alone -- and restores everything it touched afterwards
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/type_test.ps1
-
-# 1. the one place the version number is written
-#    installer/likhi.iss:   #define AppVersion "x.y.z"      (and a changelog entry above it)
-
-uv run python scripts/build_engine.py      # reads the version from likhi.iss and bakes it in
-uv run python scripts/build_shell.py
-uv run python scripts/build_app.py
-uv run python scripts/build_client.py
-ISCC.exe installer/likhi.iss               # dist/LikhiSetup-x.y.z.exe
-
-# 2. sign: writes latest.json and latest.json.sig, and checks them against the keys the engine trusts
-engine/target/release/likhi-sign.exe manifest --installer dist/LikhiSetup-x.y.z.exe --version x.y.z --out dist/release-x.y.z
-
-# 3. publish all three files together
-gh release create vx.y.z dist/release-x.y.z/LikhiSetup-x.y.z.exe dist/release-x.y.z/latest.json dist/release-x.y.z/latest.json.sig --prerelease
-```
-
-The signing key lives at `%USERPROFILE%\.likhi\update-signing.key`, outside the repository, and
-only `likhi-sign` reads it. Anyone who holds it can publish an update every installation will
-accept, so it belongs in a password manager and nowhere else. Losing it is recoverable -- ship a
-build that trusts a new key, which testers install by hand once -- but leaking it is not.
-
-Telemetry from a pilot is handled by `likhi-report`, which is also Rust and also behind the `tools`
-feature, so it is never part of an installation:
-
-```
-target/release/likhi-report show                       # what this machine holds, shares nothing
-target/release/likhi-report pull --out pilot           # needs the admin key, never shipped
-target/release/likhi-report collect --drop pilot --out feedback.jsonl
-```
-
-## Data and model licenses
-
-Likhi's code is MIT. It builds on open data and models whose licenses are respected as follows:
+Likhi's code is MIT. It builds on open data and models whose licences are respected as follows:
 
 | Resource | License | Use in Likhi |
 |---|---|---|
