@@ -49,11 +49,13 @@ if (Test-Path $root) {
     Write-Host "  FOUND $root"
     foreach ($f in @("shell\x64\LikhiTextService.dll", "shell\x86\LikhiTextService.dll",
                      "shell\x64\likhi.ico", "config.json", "Likhi.exe",
-                     "engine\likhi-server.exe", "engine\models\lexicon\unigrams.lkx",
-                     "engine\models\indicxlit\model.lkw")) {
+                     "engine\likhi-server.exe", "engine\models\lexicon\unigrams.lkx")) {
         $p = Join-Path $root $f
         if (Test-Path $p) { Write-Host "    ok      $f" } else { Write-Host "    MISSING $f" }
     }
+    # The transliteration model: the Likhi model since 0.6.0, IndicXlit before it.
+    $models = @("engine\models\likhi\model.lkw", "engine\models\indicxlit\model.lkw") | Where-Object { Test-Path (Join-Path $root $_) }
+    if ($models) { Write-Host "    ok      $($models[0])" } else { Write-Host "    MISSING engine\models\likhi\model.lkw (or indicxlit)" }
 } else { Write-Host "  MISSING $root" }
 # A leftover PIME install is not an error -- someone may use it for another language -- but our
 # files inside it are, because they mean an upgrade did not finish cleaning up.

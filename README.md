@@ -1,13 +1,15 @@
 # Likhi (লিখি)
 
 **A Gboard-style Bangla phonetic input method for Windows.** Type Bangla the way you already
-romanize it in chat, with no spelling rules to learn, and get the right word first, with a few
-alternatives you can pick with a key. It learns from you, runs fully offline, and works in every
-app through the Windows Text Services Framework.
+romanize it in chat, with no spelling rules to learn, and get the right word first, correctly
+spelt, with a few alternatives you can pick with a key. It reads the sentence you are writing,
+guesses the next word, learns from you, runs on your own machine, and works in every app through
+the Windows Text Services Framework.
 
 > Status: **in pilot.** There is an installer, and the keyboard works system-wide including Store
-> applications. Suggestion quality is still being tuned on real typing. See
-> [docs/PLAN.md](docs/PLAN.md) and [docs/STATUS.md](docs/STATUS.md).
+> applications. Since 0.6.0 it runs Likhi's own model, trained for this keyboard. Suggestion
+> quality is still being tuned on real typing. See [docs/PLAN.md](docs/PLAN.md) and
+> [docs/STATUS.md](docs/STATUS.md).
 
 ## Why
 
@@ -22,11 +24,16 @@ experience to the Windows desktop, as open source.
 - Loose, case-insensitive romanization: `amr`, `amar`, `aamar` all give আমার first.
 - Top suggestion right the vast majority of the time; 2 to 4 alternatives selectable by number
   keys or arrows. Space or Enter commits the first.
+- Reads the sentence: the words before the one you are typing help choose it, so the same letters
+  can give a different word in a different sentence.
+- Correct spelling first: chat is full of misspellings (হইসে for হয়েছে), and Likhi prefers the
+  correctly spelt word: 97% of first suggestions on held-out chat are correctly spelt.
 - Reasonable output for words it has never seen: names, slang, English loanwords in Bangla script.
 - Learns from you: keep picking the second suggestion and it becomes the first.
-- Predicts the next word as you start it: words that usually follow the last one and fit the letters
-  typed so far appear at the end of the suggestion list, in green. Space always takes the first
-  reading of what you actually typed, so a guess is never inserted unless you pick it.
+- Guesses the word you are typing and the next one: its surest guess is marked **Tab** in the list,
+  and Tab takes it. After Space the same guess is offered for the next word. A guess is shown only
+  when it is right about two times in three, and it is never misspelt. Space always takes the first
+  reading of what you actually typed, so a guess is never inserted unless you ask for it.
 - Tab, Enter, Space, punctuation, Delete, Home, Ctrl combinations -- any key that ends a word commits
   the highlighted suggestion first, then does its usual job.
 - An icon beside the clock: open Likhi, check for updates, or exit. Exiting lasts until Likhi is
@@ -41,16 +48,29 @@ experience to the Windows desktop, as open source.
 
 ## How it works (short)
 
-Likhi follows the recipe behind Gboard's transliteration keyboards: a transliteration model
-that has learned from real human romanizations, combined with a Bangla word lexicon, a word
-language model for context, and a personal model that learns from your choices. Details,
-sources, and the accuracy targets are in [docs/PLAN.md](docs/PLAN.md) and
-[docs/research](docs/research).
+Likhi follows the recipe behind Gboard's transliteration keyboards: a model that has learned from
+real human romanizations, combined with a Bangla word lexicon, a spelling list, and a personal
+model that learns from your choices. Details, sources, and the accuracy targets are in
+[docs/PLAN.md](docs/PLAN.md) and [docs/research](docs/research).
+
+**The Likhi model** (since 0.6.0) is one small network, built for Likhi, that does three jobs. It
+reads the words before the one you are typing and the letters you typed, and
+
+- *transliterates* them: what you typed, as Bangla, in this sentence;
+- *completes* them: the word they are the beginning of;
+- *predicts the next word*.
+
+It replaces two models: IndicXlit, which transliterated a word alone, and a separate next-word
+model. On held-out text it gets the first
+suggestion right more often than 0.5's engine (76.1% against 71.1% on the Dakshina word list), and it
+runs in 41 ms per word instead of 68, behind the typing rather than in its way: a keystroke only
+ever waits for the tables, about half a millisecond.
 
 ```
 keystroke -> TSF text service (a DLL, loaded into the app) -> engine (one background process)
-             engine: normalize -> candidates (lexicon index | transliteration model | rule literal | raw Latin)
-                     -> rank (transliteration score x language model x personal history) -> top 5
+             engine: normalize -> candidates (lexicon index | Likhi model | rule literal | raw Latin)
+                     -> rank (model score x lexicon x spelling x personal history) -> top 5
+             after each word: the Likhi model's next-word guess, shown as Tab when it is sure
 ```
 
 The text service and the engine talk over a named pipe, with a local socket as a fallback. The pipe
@@ -156,9 +176,15 @@ The lexicon builder writes the `.lkx` tables directly. It refuses to run without
 the tuned ranker weights produced by `likhi-tune`: they are not a build output, and a lexicon
 missing them costs about seven points of top-1 silently.
 
-`build_rust_data.py` converts the transliteration model and the Avro rule tables, and stays in
-Python because its sources are a NumPy `.npz` and a Python module. It runs once per model, on a
-developer machine, and its output is what the engine maps.
+`build_rust_data.py` converts IndicXlit (the model before 0.6.0, still read when no Likhi model is
+installed) and the Avro rule tables, and stays in Python because its sources are a NumPy `.npz` and
+a Python module. It runs once per model, on a developer machine, and its output is what the engine
+maps.
+
+The Likhi model, in `models/rust/likhi`, is built separately and is not reproduced from this
+repository. `LIKHI_MODEL=<model dir> cargo test --release --test likhimodel` checks that the engine
+computes exactly the reference answers that come with a model, and that its 8-bit word table changes
+nothing that matters.
 
 Measuring and tuning, which is where ranking work happens:
 
@@ -168,6 +194,13 @@ cargo build --release --features tools
 
 # accuracy: ~2 minutes across all cores
 target/release/likhi-eval words --dataset dakshina-dev
+
+# in context, as typed: every chat word after the words before it, with how often the first
+# choice is correctly spelt
+target/release/likhi-eval context --dataset banglatlit-val
+
+# the next-word and Tab guess, exactly as the keyboard asks for it
+target/release/likhi-eval predict --dataset banglatlit-val --model ../models/rust/likhi
 
 # ranker weights: cache features once, then search over weights in seconds
 target/release/likhi-tune cache  --dataset dakshina-dev --dataset banglatlit-val-words
@@ -240,14 +273,21 @@ Likhi's code is MIT. It builds on open data and models whose licenses are respec
 |---|---|---|
 | [Dakshina](https://github.com/google-research-datasets/dakshina) | CC BY-SA 4.0 | evaluation, training; derived data files released under CC BY-SA 4.0 |
 | [Aksharantar](https://huggingface.co/datasets/ai4bharat/Aksharantar) | CC0 (mined) / CC-BY (manual) | training |
-| [BanglaTLit](https://github.com/farhanishmam/BanglaTLit) | MIT | chat-style tuning and evaluation |
-| [IndicXlit](https://github.com/AI4Bharat/IndicXlit) | MIT | transliteration model (weights converted to a flat memory-mapped format) |
+| [BanglaTLit](https://github.com/farhanishmam/BanglaTLit) | MIT | chat in context: the Likhi model's training, tuning and evaluation |
+| [Somoy TV YouTube comments](https://data.mendeley.com/datasets/3c3j3bkxvn/4) | CC BY 4.0 | the Likhi model's training; no comment ships |
+| [Avro Phonetic dictionary](https://github.com/OpenBangla/riti) (OpenBangla riti) | MPL-2.0 | the spelling marks: which of the lexicon's own words are correctly spelt; the list does not ship |
+| [Hunspell bn_BD](https://github.com/LibreOffice/dictionaries/tree/master/bn_BD) (LibreOffice) | GPL-2.0 | the same, at build time only; the list does not ship |
+| [IndicXlit](https://github.com/AI4Bharat/IndicXlit) | MIT | the transliteration model before 0.6.0; the Likhi model keeps its shape |
 | [avro.py](https://github.com/hitblast/avro.py) | MIT or Apache-2.0 | the Avro Phonetic rule tables, used as one candidate channel |
 | [IndicCorp v2](https://huggingface.co/datasets/ai4bharat/IndicCorpV2) | CC0 | word frequencies, language model |
 | [FrequencyWords](https://github.com/hermitdave/FrequencyWords) (OpenSubtitles) | CC BY-SA 4.0 | conversational word frequencies |
-| Bengali Wikipedia | CC BY-SA | language model |
+| Bengali Wikipedia | CC BY-SA | the Likhi model's training, word frequencies |
 
-Likhi is not affiliated with Avro Keyboard, OmicronLab, Google, or Microsoft.
+The Likhi model's weights are released under CC BY-SA 4.0, the strongest term of the data it learnt
+from; everything that ships, with its source, is listed in [THIRD-PARTY.md](THIRD-PARTY.md).
+
+Likhi is not affiliated with Avro Keyboard, OmicronLab, OpenBangla, LibreOffice, Somoy TV,
+AI4Bharat, Google, or Microsoft.
 
 ## License
 

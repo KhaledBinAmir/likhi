@@ -34,7 +34,7 @@ use likhi_ui::{CandidateWindow, Fonts};
 const WM_UI_WAKE: u32 = WM_APP + 1;
 
 enum Command {
-    Show { items: Vec<String>, cursor: usize, rect: RECT, tab_hint: bool, predicted_from: Option<usize> },
+    Show { content: likhi_ui::Content, rect: RECT },
     Hide,
 }
 
@@ -121,8 +121,7 @@ fn ui_thread(rx: Receiver<Command>, ready: Sender<Option<u32>>) {
                 last = Some(cmd);
             }
             match last {
-                Some(Command::Show { items, cursor, rect, tab_hint, predicted_from }) => {
-                    let content = likhi_ui::Content { candidates: items, cursor, tab_hint, predicted_from };
+                Some(Command::Show { content, rect }) => {
                     window.show_content(content, &rect);
                     shown_at = Some(std::time::Instant::now());
                     if timer == 0 {
@@ -190,12 +189,12 @@ fn send(cmd: Command) -> bool {
     unsafe { PostThreadMessageW(host.thread_id, WM_UI_WAKE, WPARAM(0), LPARAM(0)).is_ok() }
 }
 
-/// Show `items` at `rect`, in screen coordinates, with `cursor` highlighted.
-pub fn show(items: Vec<String>, cursor: usize, rect: RECT, tab_hint: bool, predicted_from: Option<usize>) -> bool {
-    if items.is_empty() {
+/// Show `content` at `rect`, in screen coordinates.
+pub fn show(content: likhi_ui::Content, rect: RECT) -> bool {
+    if content.candidates.is_empty() {
         return hide();
     }
-    send(Command::Show { items, cursor, rect, tab_hint, predicted_from })
+    send(Command::Show { content, rect })
 }
 
 pub fn hide() -> bool {

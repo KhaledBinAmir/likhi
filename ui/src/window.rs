@@ -58,6 +58,11 @@ const GAP: f32 = 18.0;
 /// Between a candidate's number and its word. Without it the digit crowds the Bangla and the pair
 /// reads as one token: "1আমার" rather than "1  আমার".
 const NUMBER_GAP: f32 = 5.0;
+/// The "Tab" mark after the model's guess: its gap from the word, its inner padding, and its text
+/// size as a share of the list's.
+const TAG_GAP: f32 = 6.0;
+const TAG_PAD: f32 = 4.0;
+const TAG_SCALE: f32 = 0.78;
 /// Highlight pill overhang around the selected candidate.
 const PILL_X: f32 = 6.0;
 const PILL_Y: f32 = 3.0;
@@ -150,6 +155,13 @@ pub struct Content {
     /// and in their own colour: the entries before are readings of what was typed, these are
     /// guesses at the whole next word, and a glance should be enough to tell them apart.
     pub predicted_from: Option<usize>,
+    /// Where the Latin exactly as typed is, if it is in the list: drawn dimmer, so it reads as
+    /// "keep it in English" rather than as another Bangla reading.
+    pub typed_at: Option<usize>,
+    /// The model's guess at the word, which Tab takes: drawn in the guess colour with a small "Tab"
+    /// after it. One of the readings when the guess is among them, so nothing moves; otherwise the
+    /// entry `predicted_from` puts after a divider.
+    pub tab_at: Option<usize>,
 }
 
 /// One candidate's measurements, in DIPs. The number and the word are measured separately because
@@ -158,12 +170,15 @@ pub struct Content {
 struct CellMetrics {
     number_width: f32,
     word_width: f32,
+    /// The "Tab" text, for the guess only; zero elsewhere.
+    tag_width: f32,
     height: f32,
 }
 
 impl CellMetrics {
     fn width(&self) -> f32 {
-        self.number_width + NUMBER_GAP + self.word_width
+        let tag = if self.tag_width > 0.0 { TAG_GAP + self.tag_width + 2.0 * TAG_PAD } else { 0.0 };
+        self.number_width + NUMBER_GAP + self.word_width + tag
     }
 }
 
@@ -176,6 +191,8 @@ struct Inner {
     d2d: Option<ID2D1Factory>,
     dwrite: Option<IDWriteFactory>,
     format: Option<IDWriteTextFormat>,
+    /// The smaller face of the same family, for the "Tab" mark.
+    small: Option<IDWriteTextFormat>,
     target: Option<ID2D1HwndRenderTarget>,
     /// Config stamp the current text format was built from, so a font chosen in the Likhi window
     /// takes effect while typing rather than at the next sign-in.
@@ -216,6 +233,7 @@ impl CandidateWindow {
             d2d: None,
             dwrite: None,
             format: None,
+            small: None,
             target: None,
             config_stamp: 0,
             last_checked: None,
@@ -456,20 +474,26 @@ impl Inner {
                 FONT_DIP
             };
             log!("candidate window font: {} at {}px", family.display(), size);
-            let format = dwrite
-                .CreateTextFormat(
-                    family,
-                    None,
-                    DWRITE_FONT_WEIGHT_NORMAL,
-                    DWRITE_FONT_STYLE_NORMAL,
-                    DWRITE_FONT_STRETCH_NORMAL,
-                    size,
-                    w!("bn-BD"),
-                )
-                .ok()?;
-            let _ = format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            let make = |px: f32| -> Option<IDWriteTextFormat> {
+                let f = dwrite
+                    .CreateTextFormat(
+                        family,
+                        None,
+                        DWRITE_FONT_WEIGHT_NORMAL,
+                        DWRITE_FONT_STYLE_NORMAL,
+                        DWRITE_FONT_STRETCH_NORMAL,
+                        px,
+                        w!("bn-BD"),
+                    )
+                    .ok()?;
+                let _ = f.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                Some(f)
+            };
+            let format = make(size)?;
+            let small = make(size * TAG_SCALE)?;
             self.dwrite = Some(dwrite);
             self.format = Some(format);
+            self.small = Some(small);
         }
         Some(())
     }
@@ -512,6 +536,7 @@ impl Inner {
     fn cells(&self) -> Option<Vec<CellMetrics>> {
         let dwrite = self.dwrite.as_ref()?;
         let format = self.format.as_ref()?;
+        let small = self.small.as_ref()?;
         self.content
             .candidates
             .iter()
@@ -519,9 +544,11 @@ impl Inner {
             .map(|(i, word)| {
                 let n = text_metrics(dwrite, format, &number_label(&self.content, i))?;
                 let w = text_metrics(dwrite, format, word)?;
+                let tag_width = if self.content.tab_at == Some(i) { text_metrics(dwrite, small, "Tab")?.width } else { 0.0 };
                 Some(CellMetrics {
                     number_width: n.width,
                     word_width: w.width,
+                    tag_width,
                     height: n.height.max(w.height),
                 })
             })
@@ -546,6 +573,8 @@ impl Inner {
         if content.candidates == self.content.candidates
             && content.cursor == self.content.cursor
             && content.predicted_from == self.content.predicted_from
+            && content.typed_at == self.content.typed_at
+            && content.tab_at == self.content.tab_at
         {
             return;
         }
@@ -568,6 +597,7 @@ impl Inner {
         let target = self.target.clone().expect("target");
         let dwrite = self.dwrite.clone().expect("dwrite");
         let format = self.format.clone().expect("format");
+        let small = self.small.clone().expect("small format");
         let theme = theme();
         let scale = self.scale();
 
@@ -611,7 +641,10 @@ impl Inner {
             let mut x = PAD_X;
             for (i, (word, cell)) in self.content.candidates.iter().zip(&cells).enumerate() {
                 let selected = i == self.content.cursor;
-                let is_predicted = self.content.predicted_from.is_some_and(|from| i >= from);
+                let is_typed = self.content.typed_at == Some(i);
+                let is_guess = self.content.tab_at == Some(i);
+                let is_predicted =
+                    is_guess || (!is_typed && self.content.predicted_from.is_some_and(|from| i >= from));
                 // The divider sits in the gap before the first prediction, so it costs no width.
                 if i > 0 && self.content.predicted_from == Some(i) {
                     let mid = x - GAP / 2.0;
@@ -637,13 +670,32 @@ impl Inner {
                     target.FillRoundedRectangle(&pill, &highlight);
                 }
                 let number_brush = if selected { &highlight_text } else { &number };
-                let word_brush = match (selected, is_predicted) {
-                    (true, _) => &highlight_text,
-                    (false, true) => &predicted,
-                    (false, false) => &text,
+                let word_brush = match (selected, is_predicted, is_typed) {
+                    (true, _, _) => &highlight_text,
+                    (false, true, _) => &predicted,
+                    (false, false, true) => &number,
+                    (false, false, false) => &text,
                 };
                 draw_text(&target, &dwrite, &format, &number_label(&self.content, i), x, height_dip, number_brush);
-                draw_text(&target, &dwrite, &format, word, x + cell.number_width + NUMBER_GAP, height_dip, word_brush);
+                let word_x = x + cell.number_width + NUMBER_GAP;
+                draw_text(&target, &dwrite, &format, word, word_x, height_dip, word_brush);
+                if is_guess {
+                    // "Tab" in a small outlined box after the guess: the key that takes it.
+                    let tag_x = word_x + cell.word_width + TAG_GAP;
+                    let tag_h = small.GetFontSize() * 1.45;
+                    let tag = D2D1_ROUNDED_RECT {
+                        rect: D2D_RECT_F {
+                            left: tag_x,
+                            top: (height_dip - tag_h) / 2.0,
+                            right: tag_x + cell.tag_width + 2.0 * TAG_PAD,
+                            bottom: (height_dip + tag_h) / 2.0,
+                        },
+                        radiusX: 3.0,
+                        radiusY: 3.0,
+                    };
+                    target.DrawRoundedRectangle(&tag, number_brush, 1.0, None);
+                    draw_text(&target, &dwrite, &small, "Tab", tag_x + TAG_PAD, height_dip, number_brush);
+                }
                 x += cell.width() + GAP;
             }
 

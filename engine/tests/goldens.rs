@@ -448,7 +448,17 @@ fn open_engine() -> Option<likhi_engine::core::Engine> {
         eprintln!("SKIPPING engine tests: run scripts/build_rust_data.py first");
         return None;
     }
-    let opts = likhi_engine::core::EngineOptions { personal: None, ..Default::default() };
+    // The engine the goldens were recorded from: IndicXlit, the ranker weights of that time
+    // (`goldens/weights.json`, as they were before 0.6.0), no spelling list. Since 0.6.0 the tables
+    // sit beside the Likhi model and weights tuned for it; these tests pin the ranking code, so
+    // they pin the data it ran on too.
+    let opts = likhi_engine::core::EngineOptions {
+        personal: None,
+        model_dir: Some(dir.join("indicxlit")),
+        weights_file: Some(goldens_dir().join("weights.json")),
+        use_spelling: false,
+        ..Default::default()
+    };
     Some(likhi_engine::core::Engine::open(&dir, opts).expect("engine opens"))
 }
 

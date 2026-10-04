@@ -24,7 +24,7 @@ use crate::avro::Avro;
 use crate::lexicon::{rec_u32, rec_u32_i8, rec_u32x3, Table};
 use crate::personal::PersonalStore;
 use crate::romankey::{key_from_bangla, key_from_roman, Level};
-use crate::textnorm::{canonical, normalize_roman, to_output};
+use crate::textnorm::{canonical, normalize_roman, to_output, tokens};
 use crate::xlit::Xlit;
 
 /// The log-prior given to an unknown word the model is sure about.
@@ -47,7 +47,15 @@ const FAST_TRUST_ROM_EXACT: u32 = 5;
 /// Only next-word suggestions: typing the word is unaffected. Its count still stays in the total,
 /// so removing it lowers the other continuations' share rather than promoting them past the
 /// threshold on evidence that was really about a username.
-pub const NEVER_SUGGESTED_NEXT: &[&str] = &["ইউজার"];
+// Spelled as code points: ইউজার. Typed in literally, it has once come out with two characters from
+// the wrong script, which would have matched nothing and failed silently.
+pub const NEVER_SUGGESTED_NEXT: &[&str] = &["\u{0987}\u{0989}\u{099C}\u{09BE}\u{09B0}"];
+
+/// Whether a word may be offered as a suggestion at all: not the username placeholder above, and
+/// not an obscenity or slur (`blocked.rs`).
+pub fn never_suggested(word: &str) -> bool {
+    NEVER_SUGGESTED_NEXT.contains(&word) || crate::blocked::is_blocked(word)
+}
 
 /// Bengali spellings of English letter names, longest-disambiguating first.
 ///
@@ -102,6 +110,10 @@ pub struct Feats {
     pub personal_sel: f64,
     pub personal_share: f64,
     pub personal_word: f64,
+    /// A known correct spelling: in the spelling list (`lexicon/spelling.lkx`). Corpora are full of
+    /// misspellings -- chat writes বুজতে as often as বুঝতে -- so a word's frequency says nothing
+    /// about whether it is spelt right, and this is what does.
+    pub spelled: bool,
     pub sources: HashSet<&'static str>,
 }
 
@@ -190,6 +202,9 @@ impl Weights {
             ("personal_sel", 5.0),
             ("personal_word", 0.6),
             ("bigram", 0.7),
+            // Off until a spelling list is installed and its weight chosen (likhi-tune, and the
+            // spelling check in likhi-eval); set in weights.json beside the list.
+            ("spelled", 0.0),
             ("latin_base", -6.0),
             ("latin", 0.0),
         ]
@@ -235,13 +250,16 @@ pub struct Engine {
     prefixes: Option<Table>,
     bigrams: Option<Table>,
     bigram_totals: Option<Table>,
+    /// Correctly spelt words (see `Feats::spelled`), when the list is installed.
+    spelling: Option<Table>,
     uni_total: f64,
     floor: f64,
     w: Weights,
     pub beam: usize,
     max_per_channel: usize,
     model_scored: usize,
-    xlit: Option<Xlit>,
+    /// Shared with the next-word predictor when the Likhi model has a word head.
+    xlit: Option<Arc<Xlit>>,
     avro: Option<Avro>,
     /// Behind a mutex rather than owned mutably, so the whole engine is `Sync` and `suggest` takes
     /// `&self`.
@@ -286,6 +304,13 @@ pub struct EngineOptions {
     pub use_avro: bool,
     pub use_xlit: bool,
     pub personal: Option<PersonalStore>,
+    /// The model folder, instead of the one beside the tables (`likhi/`, else `indicxlit/`).
+    pub model_dir: Option<std::path::PathBuf>,
+    /// The ranker weights, instead of `lexicon/weights.json`.
+    pub weights_file: Option<std::path::PathBuf>,
+    /// Read `lexicon/spelling.lkx` when it is there. Off pins the engine as it was before the
+    /// spelling list, as the goldens need.
+    pub use_spelling: bool,
 }
 
 impl Default for EngineOptions {
@@ -297,6 +322,9 @@ impl Default for EngineOptions {
             use_avro: true,
             use_xlit: true,
             personal: None,
+            model_dir: None,
+            weights_file: None,
+            use_spelling: true,
         }
     }
 }
@@ -318,6 +346,7 @@ impl Engine {
         };
         let prefixes = optional("prefixes.lkx");
         let bigrams = optional("bigrams.lkx");
+        let spelling = if opts.use_spelling { optional("spelling.lkx") } else { None };
         let bigram_totals = if bigrams.is_some() {
             optional("bigram_totals.lkx")
         } else {
@@ -334,7 +363,7 @@ impl Engine {
         let floor = (0.5 / uni_total).ln();
 
         let mut weights = Weights::default_map();
-        let tuned = lex.join("weights.json");
+        let tuned = opts.weights_file.clone().unwrap_or_else(|| lex.join("weights.json"));
         if tuned.exists() {
             if let Ok(text) = std::fs::read_to_string(&tuned) {
                 if let Ok(map) = serde_json::from_str::<HashMap<String, f64>>(&text) {
@@ -343,8 +372,17 @@ impl Engine {
             }
         }
 
+        // The Likhi model when one is installed beside the tables (`likhi/`), IndicXlit otherwise;
+        // `LIKHI_XLIT` names a model folder outright, for comparing two of them, and the options
+        // can name one too.
         let xlit = if opts.use_xlit {
-            Some(Xlit::open(&data_dir.join("indicxlit"))?)
+            let dir = match (&opts.model_dir, std::env::var_os("LIKHI_XLIT")) {
+                (Some(d), _) => d.clone(),
+                (None, Some(d)) => std::path::PathBuf::from(d),
+                (None, None) if data_dir.join("likhi").join("model.lkw").exists() => data_dir.join("likhi"),
+                (None, None) => data_dir.join("indicxlit"),
+            };
+            Some(std::sync::Arc::new(Xlit::open(&dir)?))
         } else {
             None
         };
@@ -371,6 +409,7 @@ impl Engine {
             avro,
             personal: opts.personal.map(Mutex::new),
             followers: Mutex::new(None),
+            spelling,
         })
     }
 
@@ -452,8 +491,9 @@ impl Engine {
     ///
     /// "Could be the beginning of" is decided on the coarse phonetic key -- the same key, compared
     /// the same way, that finds ordinary completions -- so "k" and "kh" both reach খুব, and "ko"
-    /// reaches করবেন however the vowel is spelled. Most frequent after `prev` first.
-    pub fn next_completions(&self, prev: &str, roman: &str, k: usize) -> Vec<String> {
+    /// reaches করবেন however the vowel is spelled. Most frequent after `prev` first, each with its
+    /// share of everything kept after `prev` that fits the letters.
+    pub fn next_completions(&self, prev: &str, roman: &str, k: usize) -> Vec<(String, f32)> {
         let r = normalize_roman(roman);
         if r.is_empty() || k == 0 {
             return Vec::new();
@@ -462,12 +502,10 @@ impl Engine {
         if typed.is_empty() {
             return Vec::new();
         }
-        self.followers(prev)
-            .iter()
-            .filter(|(_, _, key)| key.starts_with(&typed))
-            .take(k)
-            .map(|(_, w, _)| to_output(w))
-            .collect()
+        let followers = self.followers(prev);
+        let fitting: Vec<&(u32, String, String)> = followers.iter().filter(|(_, _, key)| key.starts_with(&typed)).collect();
+        let total = fitting.iter().map(|(n, _, _)| u64::from(*n)).sum::<u64>().max(1) as f32;
+        fitting.into_iter().take(k).map(|(n, w, _)| (to_output(w), *n as f32 / total)).collect()
     }
 
     /// Everything that follows `prev` in the table, most frequent first, with each word's key.
@@ -490,7 +528,7 @@ impl Engine {
                 .prefix_iter(&format!("{prev}\t"))
                 .into_iter()
                 .filter_map(|(key, rec)| key.split_once('\t').map(|(_, w)| (rec_u32(rec), w.to_string())))
-                .filter(|(_, w)| !NEVER_SUGGESTED_NEXT.contains(&w.as_str()))
+                .filter(|(_, w)| !never_suggested(w))
                 .collect(),
             None => Vec::new(),
         };
@@ -530,7 +568,19 @@ impl Engine {
         opts: &CandidateOptions,
         abort: Option<&AtomicBool>,
     ) -> Result<FeatTable, Aborted> {
-        self.gather(roman, use_model, opts, abort)
+        self.gather(roman, &[], use_model, opts, abort)
+    }
+
+    /// `candidates_with`, typed after `context` (as for `candidates_in_context`): what the tuner
+    /// caches for a word in a sentence, so the model's scores are the ones it gives in context.
+    pub fn candidates_with_context(
+        &self,
+        roman: &str,
+        context: &[String],
+        use_model: bool,
+        opts: &CandidateOptions,
+    ) -> FeatTable {
+        self.gather(roman, context, use_model, opts, None).expect("no abort flag was given")
     }
 
     /// Gather candidates, giving up if `abort` is raised between the expensive stages.
@@ -544,12 +594,26 @@ impl Engine {
         use_model: bool,
         abort: Option<&AtomicBool>,
     ) -> Result<FeatTable, Aborted> {
-        self.gather(roman, use_model, &CandidateOptions::default(), abort)
+        self.gather(roman, &[], use_model, &CandidateOptions::default(), abort)
+    }
+
+    /// `candidates_abortable`, typed after `context`: the words before, as typed into the
+    /// application. A model that reads the sentence (the Likhi model) is given it; one that does
+    /// not (IndicXlit) is not, and then this is exactly `candidates_abortable`.
+    pub fn candidates_in_context(
+        &self,
+        roman: &str,
+        context: &[String],
+        use_model: bool,
+        abort: Option<&AtomicBool>,
+    ) -> Result<FeatTable, Aborted> {
+        self.gather(roman, context, use_model, &CandidateOptions::default(), abort)
     }
 
     fn gather(
         &self,
         roman: &str,
+        context: &[String],
         use_model: bool,
         opts: &CandidateOptions,
         abort: Option<&AtomicBool>,
@@ -703,7 +767,12 @@ impl Engine {
                 if give_up() {
                     return Err(Aborted);
                 }
-                let enc = x.encode(&r, "bn");
+                let enc = if x.reads_context() {
+                    // The model's words: Bangla only, canonical, as it was trained on.
+                    x.encode_ctx(false, &tokens(&context.join(" ")), &r)
+                } else {
+                    x.encode(&r, "bn")
+                };
                 for (rank, (word, lp)) in
                     x.beam_search(&r, self.beam, self.beam, &enc).into_iter().enumerate()
                 {
@@ -759,6 +828,12 @@ impl Engine {
                 if !t.feats[idx].is_latin {
                     t.feats[idx].personal_word = p.word_count(&t.order[idx], None);
                 }
+            }
+        }
+
+        if let Some(sp) = &self.spelling {
+            for i in 0..t.feats.len() {
+                t.feats[i].spelled = sp.get(&t.order[i]).is_some();
             }
         }
 
@@ -882,6 +957,11 @@ pub fn score_features(word: &str, ft: &Feats, unigram_logp: f64, w: &Weights) ->
         if ft.avro {
             s += w.get("avro");
         }
+        // A known correct spelling over a variant of the same word that is not. Between two real
+        // words both are spelt and this cancels, so it decides spelling and never meaning.
+        if ft.spelled {
+            s += w.get("spelled");
+        }
         if !ft.in_lexicon {
             // The unknown-word penalty encodes "probably not a real word". A confident model is
             // evidence to the contrary: at log P > -3 the penalty fades, at log P ~ 0 it vanishes
@@ -930,7 +1010,7 @@ impl Engine {
     ) -> Result<Vec<String>, Aborted> {
         let r = normalize_roman(roman);
         let prev: Vec<String> = context.last().map(|c| vec![canonical(c)]).unwrap_or_default();
-        let t = self.candidates_abortable(&r, !fast, abort)?;
+        let t = self.candidates_in_context(&r, context, !fast, abort)?;
         if t.is_empty() {
             return Ok(Vec::new());
         }
@@ -947,6 +1027,33 @@ impl Engine {
             scored[b].partial_cmp(&scored[a]).unwrap_or(std::cmp::Ordering::Equal)
         });
         Ok(idx.into_iter().take(k).map(|i| to_output(&t.order[i])).collect())
+    }
+
+    /// Whether `word` (as typed into the application) is a known correct spelling; None when no
+    /// spelling list is installed.
+    pub fn is_spelled(&self, word: &str) -> Option<bool> {
+        self.spelling.as_ref().map(|s| s.get(&canonical(word)).is_some())
+    }
+
+    /// The transliteration model, for the next-word predictor when it is the Likhi model with a
+    /// word head (`Predictor::from_likhi`): one model in memory doing both jobs.
+    pub fn transliterator(&self) -> Option<Arc<Xlit>> {
+        self.xlit.clone()
+    }
+
+    /// The full ranking with each candidate's score and features, best first: what `suggest`
+    /// returns, in the same order, with the evidence behind each place. For the tools that study
+    /// the ranking and learn a better one.
+    pub fn ranked(&self, roman: &str, context: &[String], k: usize) -> Vec<(String, f64, Feats)> {
+        let r = normalize_roman(roman);
+        let prev: Vec<String> = context.last().map(|c| vec![canonical(c)]).unwrap_or_default();
+        let t = self.candidates_in_context(&r, context, true, None).expect("no abort flag was given");
+        let mut scored: Vec<(String, f64, Feats)> = (0..t.feats.len())
+            .map(|i| (to_output(&t.order[i]), self.score_inner(&t.order[i], &t.feats[i], &prev), t.feats[i].clone()))
+            .collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(k);
+        scored
     }
 
     /// Model-free ranking plus a confidence flag, from one pass over the table channels.

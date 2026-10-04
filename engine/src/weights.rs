@@ -44,6 +44,10 @@ pub struct Meta {
     pub pos_offset: usize,
     pub max_positions: usize,
     pub scaling: f32,
+    /// The Likhi model reads its context words whole as well as letter by letter, from the word
+    /// head's table (`word_embed`, or `word_head.lkq`). Absent in older bundles: false.
+    #[serde(default)]
+    pub word_context: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -219,8 +223,19 @@ impl Weights {
         self.index.get(name).copied().unwrap_or(Arr::EMPTY)
     }
 
+    /// The names of every array in the bundle.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.index.keys().map(String::as_str)
+    }
+
     pub fn get(&self, a: Arr) -> &[f32] {
         &self.data()[a.off..a.off + a.len()]
+    }
+
+    /// The bundle's index as written, for rewriting it.
+    fn raw_index(&self) -> Result<serde_json::Value, WeightError> {
+        let index_len = u32::from_le_bytes([self.map[8], self.map[9], self.map[10], self.map[11]]) as usize;
+        serde_json::from_slice(&self.map[12..12 + index_len]).map_err(|e| WeightError::Corrupt(e.to_string()))
     }
 
     /// One row of a 2-D array: embedding lookups and position tables.
@@ -230,4 +245,42 @@ impl Weights {
         let start = a.off + i * a.cols;
         &self.data()[start..start + a.cols]
     }
+}
+
+/// Rewrite a bundle in place without the arrays named in `drop`, everything else byte for byte,
+/// offsets renumbered. Written beside it first, then renamed over it, so a failure leaves the
+/// original whole.
+pub fn rewrite_without(path: &Path, drop: &[&str]) -> Result<(), WeightError> {
+    let mut blob: Vec<u8> = Vec::new();
+    let header = {
+        let w = Weights::open(path)?;
+        let mut index = w.raw_index()?;
+        let arrays = index["arrays"].as_array().cloned().unwrap_or_default();
+        let mut kept = Vec::new();
+        for mut a in arrays {
+            let name = a["name"].as_str().unwrap_or_default().to_string();
+            if drop.contains(&name.as_str()) {
+                continue;
+            }
+            let arr = w.arr(&name)?;
+            a["offset"] = serde_json::json!(blob.len() / 4);
+            for v in w.get(arr) {
+                blob.extend_from_slice(&v.to_le_bytes());
+            }
+            kept.push(a);
+        }
+        index["arrays"] = serde_json::Value::Array(kept);
+        serde_json::to_vec(&index).map_err(|e| WeightError::Corrupt(e.to_string()))?
+    };
+    let mut out = Vec::with_capacity(64 + header.len() + blob.len());
+    out.extend_from_slice(MAGIC);
+    out.extend_from_slice(&VERSION.to_le_bytes());
+    out.extend_from_slice(&(header.len() as u32).to_le_bytes());
+    out.extend_from_slice(&header);
+    out.resize(out.len().next_multiple_of(64), 0);
+    out.extend_from_slice(&blob);
+    let tmp = path.with_extension("lkw.tmp");
+    std::fs::write(&tmp, out)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
 }

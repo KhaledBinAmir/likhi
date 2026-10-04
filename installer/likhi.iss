@@ -8,6 +8,23 @@
 ; rights once and leaves the user with a working Bangla keyboard and nothing to configure.
 
 #define AppName "Likhi"
+; 0.6.0: Likhi's own model. One network, trained for Likhi, does what IndicXlit and the separate
+;        next-word model did between them: it reads the sentence so far -- from the document, not
+;        from Likhi's memory of what it typed -- with the letters typed, and writes the word,
+;        finishes a word from its first letters, and guesses the next one. On held-out text the
+;        first suggestion is the right word more often (chat whose reference is spelt right: 86.5%
+;        against 84.8%; the Dakshina word list: 76.1% against 71.1%) and a correctly spelt word 97%
+;        of the time against 92%. The list now prefers correctly spelt words, so chat's common
+;        misspellings no longer win over the spelling they stand for. Its surest guess is marked Tab in the list, for the word being typed or,
+;        after Space, for the next one; Tab takes it, Space still takes the first reading. The Tab
+;        guess appears only when it is right about two times in three, and is never misspelt. The
+;        green predictions at the end of the list are gone: one guess, in one place. A word takes
+;        about 46 ms instead of 76, and the model is 38 MB where IndicXlit was 46.
+;        The official logo, by Azmain Riad, on the tray icon, the Likhi window, the keyboard in
+;        Win+Space, the setup program and the entry in Installed apps. What you type in English
+;        is always the last entry in the list, picked with its number like any other, so English
+;        needs no mode switch and Likhi can learn the words you keep in English. Obscenities and
+;        slurs are never suggested, though typing them is untouched.
 ; 0.5.3: sandboxed applications no longer freeze. Unigram, the Start menu's search box and the
 ;        notifications above the clock could stop responding for good -- the window still moved,
 ;        nothing inside it did -- after the engine had restarted: an update, "Exit Likhi", or a
@@ -218,7 +235,7 @@
 ;        running engine with PowerShell rather than WMIC, which Windows 11 no longer ships.
 ; 0.1.1: the engine did not look for the shell's config.json in the installed layout, so a fresh
 ;        install never reported telemetry.
-#define AppVersion "0.5.3"
+#define AppVersion "0.6.0"
 #define AppPublisher "Khaled Bin Amir"
 #define AppURL "https://github.com/KhaledBinAmir/likhi"
 #define PimeSource "C:\Program Files (x86)\PIME"
@@ -249,6 +266,10 @@ ArchitecturesAllowed=x64compatible
 PrivilegesRequired=admin
 MinVersion=10.0.18362
 UninstallDisplayName={#AppName} (Bangla phonetic keyboard)
+; The official logo (assets/icons, from scripts/make_icon.py) on the setup program itself and on
+; the entry in Installed apps, which otherwise show Inno Setup's own icon.
+SetupIconFile=..\assets\icons\Likhi_icon.ico
+UninstallDisplayIcon={app}\Likhi.exe
 WizardStyle=modern
 LicenseFile=..\LICENSE
 DisableProgramGroupPage=yes
@@ -318,6 +339,9 @@ Type: filesandordirs; Name: "{app}\pime"
 ; with it; the directory itself is left alone, because a machine may have installed PIME for its own
 ; reasons and Inno removes a directory only once it is empty.
 Type: filesandordirs; Name: "{#PimeDir}\python\input_methods\likhi"
+; 0.6.0 replaced IndicXlit with the Likhi model (engine\models\likhi). The engine would never read
+; the old one again, and it is 46 MB.
+Type: filesandordirs; Name: "{app}\engine\models\indicxlit"
 
 [UninstallDelete]
 ; Earlier text service DLLs, renamed aside by upgrades while applications still had them loaded.

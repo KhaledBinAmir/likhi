@@ -18,12 +18,14 @@
 //! a change that moves them has to be justified on its own terms rather than by re-recording.
 
 pub mod avro;
+pub mod blocked;
 pub mod core;
 /// The evaluation harness. Behind `tools`, so it is absent from the shipped engine.
 #[cfg(feature = "tools")]
 pub mod evalkit;
 pub mod http;
 pub mod lexicon;
+pub mod nextlm;
 pub mod personal;
 #[cfg(windows)]
 pub mod pipe;

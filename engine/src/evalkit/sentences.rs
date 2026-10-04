@@ -85,3 +85,34 @@ pub fn load_sentences(repo: &Path, name: &str) -> Result<Vec<SentenceItem>, Box<
     }
     Err(format!("unknown sentence set: {name}").into())
 }
+
+/// One chat sentence: its Bangla words (canonical) and its romanized words (letters only, lower
+/// case), position for position.
+pub type AlignedRow = (Vec<String>, Vec<String>);
+
+/// BanglaTLit chat sentences whose Bangla and romanization have the same number of words, and how
+/// many rows the split has in all. What the in-context evaluation and the in-context tuning share,
+/// so they read the chat identically.
+pub fn aligned_banglatlit(repo: &Path, split: &str) -> Result<(Vec<AlignedRow>, usize), Box<dyn std::error::Error>> {
+    use crate::textnorm::tokens;
+    let mut rows: Vec<AlignedRow> = Vec::new();
+    let mut total_rows = 0usize;
+    let mut rdr = csv::Reader::from_path(repo.join(format!("data/raw/banglatlit/{split}.csv")))?;
+    for rec in rdr.deserialize::<std::collections::HashMap<String, String>>() {
+        let row = rec?;
+        total_rows += 1;
+        let bn = tokens(row.get("text_bengali").map(String::as_str).unwrap_or(""));
+        let rom: Vec<String> = row
+            .get("text_transliterated")
+            .map(String::as_str)
+            .unwrap_or("")
+            .split_whitespace()
+            .map(|w| w.chars().filter(|c| c.is_ascii_alphabetic()).collect::<String>().to_ascii_lowercase())
+            .filter(|w| !w.is_empty())
+            .collect();
+        if !bn.is_empty() && bn.len() == rom.len() {
+            rows.push((bn, rom));
+        }
+    }
+    Ok((rows, total_rows))
+}

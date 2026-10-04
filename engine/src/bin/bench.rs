@@ -48,7 +48,7 @@ fn main() {
         .expect("engine/ has a parent")
         .join("models")
         .join("rust");
-    if !dir.join("indicxlit").join("model.lkw").exists() {
+    if !["likhi", "indicxlit"].iter().any(|m| dir.join(m).join("model.lkw").exists()) {
         eprintln!("run scripts/build_rust_data.py first");
         std::process::exit(1);
     }

@@ -29,17 +29,13 @@ pub struct Config {
     /// Candidate window face. Empty means the built-in preference chain.
     pub font_name: String,
     pub font_size: f32,
-    /// Predicted next words: once the next word is begun, words that usually follow the previous
-    /// one and fit the letters typed join the end of the list.
+    /// The model's guess, taken with Tab: marked in the list while a word is typed, and offered on
+    /// its own straight after Space. Only the neural model's guesses; the counted table's were
+    /// right too rarely to be offered this way.
     pub next_word: bool,
-    /// Also guess the next word before any of it is typed, straight after Space, labelled Tab.
-    /// Off by default: with only the previous word to go on, the guess is right about one time in
-    /// four when it is shown at all, and Khaled judged that not worth a popup after every word.
-    /// Kept for when the guess can use the whole sentence.
-    pub next_word_after_space: bool,
-    /// How sure the engine must be before a suggestion appears: the top continuation's share of
-    /// everything seen after the previous word. 0.2 measured right 35% of the time in the top three,
-    /// against 18% when always shown -- see `likhi-nextword`.
+    /// How sure the model must be before it offers a guess: the guess's share of the likely words
+    /// that fit what has been typed. At 0.5, on held-out chat, it was right 61 to 68 times in 100,
+    /// offered after a fifth to two fifths of first letters and after one Space in seventeen.
     pub next_word_min_share: f64,
 }
 
@@ -56,8 +52,7 @@ impl Default for Config {
             font_name: String::new(),
             font_size: 14.0,
             next_word: true,
-            next_word_after_space: false,
-            next_word_min_share: 0.2,
+            next_word_min_share: 0.5,
         }
     }
 }

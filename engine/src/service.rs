@@ -20,7 +20,10 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::core::Engine;
+use crate::nextlm::Predictor;
+use crate::romankey::{key_from_roman, Level};
 use crate::telemetry::{Mode, Telemetry};
+use crate::textnorm::normalize_roman;
 
 /// What `ping` reports: the product version this build was made as, or "dev".
 pub const VERSION: &str = match crate::update::PRODUCT_VERSION {
@@ -37,10 +40,14 @@ pub const PREDICT_MAX_LETTERS: usize = 4;
 /// How many predicted words are offered per keystroke. Two: a third added nothing measurable and
 /// pushes one more ordinary candidate off the list.
 pub const PREDICT_OFFERED: usize = 2;
+/// How long the next-word request after a commit may wait for the neural model's answer, which the
+/// commit's own learn request started a moment before (`Predictor::best_within`).
+const NEXT_WAIT: Duration = Duration::from_millis(10);
 
-/// Identifies one suggestion request: the input, the single word of context that can change the
-/// ranking, and how many candidates were asked for.
-type Key = (String, Option<String>, usize);
+/// Identifies one suggestion request: the input, the words of context that can change the ranking
+/// (as many as the transliteration model reads -- one, the bigram's, when it reads none), and how
+/// many candidates were asked for.
+type Key = (String, Vec<String>, usize);
 
 #[derive(Default)]
 struct JobState {
@@ -117,6 +124,9 @@ struct Shared {
 pub struct SuggestService {
     engine: Arc<Engine>,
     shared: Arc<(Mutex<Shared>, Condvar)>,
+    /// The neural next-word model, for those who downloaded it (`nextlm`). Without it, and while
+    /// its answer for a context is still being worked out, next words come from the counted table.
+    predictor: Option<Predictor>,
 }
 
 impl SuggestService {
@@ -131,7 +141,7 @@ impl SuggestService {
             }),
             Condvar::new(),
         ));
-        let svc = SuggestService { engine: Arc::clone(&engine), shared: Arc::clone(&shared) };
+        let svc = SuggestService { engine: Arc::clone(&engine), shared: Arc::clone(&shared), predictor: None };
         // One model worker, as in the Python: the model is the scarce resource and running two
         // copies of it would halve neither latency nor memory.
         std::thread::Builder::new()
@@ -141,8 +151,15 @@ impl SuggestService {
         svc
     }
 
+    /// Answer next words from the neural model where it can.
+    pub fn with_predictor(mut self, predictor: Predictor) -> SuggestService {
+        self.predictor = Some(predictor);
+        self
+    }
+
     fn key(roman: &str, context: &[String], k: usize) -> Key {
-        (roman.to_string(), context.last().cloned(), k)
+        let start = context.len().saturating_sub(crate::xlit::CONTEXT_WORDS);
+        (roman.to_string(), context[start..].to_vec(), k)
     }
 
     /// Candidates, whether this came from the fast path, and whether the fast path is confident.
@@ -221,25 +238,59 @@ impl SuggestService {
     }
 
     /// Words likely to follow the last committed word; empty when not confident enough to show.
-    pub fn next_words(&self, context: &[String], k: usize, min_share: f64) -> Vec<String> {
-        match context.last() {
+    /// And whether the neural model answered, rather than the counted table. `before` as for
+    /// `next_completions`.
+    pub fn next_words(&self, context: &[String], before: Option<&str>, k: usize, min_share: f64) -> (Vec<String>, bool) {
+        let model = self.predictor.as_ref().and_then(|p| p.best_within(&model_context(context, before), "", k, NEXT_WAIT));
+        if let Some(words) = model {
+            let words = match words.first() {
+                Some((_, share)) if f64::from(*share) >= min_share => words.into_iter().map(|w| w.0).collect(),
+                _ => Vec::new(),
+            };
+            return (words, true);
+        }
+        let words = match context.last() {
             Some(prev) => self.engine.next_words(prev, k, min_share),
             None => Vec::new(),
-        }
+        };
+        (words, false)
     }
 
     /// First-letter prediction: words that follow the last committed word and fit what has been
-    /// typed of the next one. Only while the word is short -- see `PREDICT_MAX_LETTERS`.
-    pub fn next_completions(&self, roman: &str, context: &[String]) -> Vec<String> {
-        match context.last() {
+    /// typed of the next one. Only while the word is short -- see `PREDICT_MAX_LETTERS`. `before`
+    /// is the document's text before the word, when the keyboard could read it (`model_context`).
+    /// Each word comes with its share of the likely words that fit the letters, which is what lets
+    /// the keyboard show only a guess that is usually right as gray text. And whether the neural
+    /// model answered, rather than the counted table.
+    pub fn next_completions(&self, roman: &str, context: &[String], before: Option<&str>) -> (Vec<(String, f32)>, bool) {
+        let letters = roman.chars().count();
+        if let (Some(p), 1..=PREDICT_MAX_LETTERS) = (&self.predictor, letters) {
+            let typed = key_from_roman(&normalize_roman(roman), Level::Coarse);
+            if typed.is_empty() {
+                return (Vec::new(), false);
+            }
+            if let Some(words) = p.best(&model_context(context, before), &typed, PREDICT_OFFERED) {
+                return (words, true);
+            }
+        }
+        let words = match context.last() {
             Some(prev) if !roman.is_empty() && roman.chars().count() <= PREDICT_MAX_LETTERS => {
                 self.engine.next_completions(prev, roman, PREDICT_OFFERED)
             }
             _ => Vec::new(),
-        }
+        };
+        (words, false)
     }
 
-    pub fn learn(&self, roman: &str, chosen: &str) {
+    /// Learn a committed word, typed after `context` (and `before`, as for `next_completions`);
+    /// and start working out what follows it, so the answer is ready by the time the next word is
+    /// begun.
+    pub fn learn(&self, roman: &str, chosen: &str, context: &[String], before: Option<&str>) {
+        if let Some(p) = &self.predictor {
+            let mut next = model_context(context, before);
+            next.push(chosen.to_string());
+            p.prepare(&next);
+        }
         self.engine.learn(roman, chosen);
         let (lock, _) = &*self.shared;
         let mut sh = lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -252,6 +303,28 @@ impl SuggestService {
         let (lock, _) = &*self.shared;
         let mut sh = lock.lock().unwrap_or_else(|e| e.into_inner());
         sh.cache.get(&key).and_then(|c| c.first().cloned()).unwrap_or_default()
+    }
+}
+
+/// The words before the one being typed, as the ranking and the Likhi model read them: from the
+/// document's own text when the keyboard sent it, otherwise the words it committed -- the Bangla
+/// words only, the last `CONTEXT_WORDS`, in the form they were typed in. Two requests with the same
+/// such words get the same answer, which is what the suggestion cache is keyed on.
+fn sentence_context(context: &[String], before: Option<&str>) -> Vec<String> {
+    let words = crate::textnorm::tokens(&model_context(context, before).join(" "));
+    let start = words.len().saturating_sub(crate::xlit::CONTEXT_WORDS);
+    words[start..].iter().map(|w| crate::textnorm::to_output(w)).collect()
+}
+
+/// What the next-word model reads as the sentence so far: the document's text before the word, from
+/// its last line break, when the keyboard could read it -- a message box, a paragraph -- and
+/// otherwise the words the keyboard itself committed. The document is the truth: it has the words
+/// typed in English, pasted, or written before a click moved the caret, and our history has none
+/// of them.
+fn model_context(context: &[String], before: Option<&str>) -> Vec<String> {
+    match before {
+        Some(text) => vec![text.rsplit(['\n', '\r']).next().unwrap_or("").to_string()],
+        None => context.to_vec(),
     }
 }
 
@@ -359,11 +432,11 @@ pub fn handle_request(svc: &SuggestService, tel: &Telemetry, raw: &[u8]) -> Vec<
                     let context = string_list(&req, "context");
                     let k = req.get("k").and_then(Value::as_u64).unwrap_or(3).clamp(1, 5) as usize;
                     let min_share = req.get("min_share").and_then(Value::as_f64).unwrap_or(0.2);
-                    let words = svc.next_words(&context, k, min_share);
+                    let (words, from_model) = svc.next_words(&context, req.get("before").and_then(Value::as_str), k, min_share);
                     if !words.is_empty() && tel.mode != Mode::Off {
                         tel.note("next_shown");
                     }
-                    json!({"ok": true, "candidates": words})
+                    json!({"ok": true, "candidates": words, "model": from_model})
                 }
                 "next_taken" => {
                     if tel.mode != Mode::Off {
@@ -391,9 +464,16 @@ pub fn handle_request(svc: &SuggestService, tel: &Telemetry, raw: &[u8]) -> Vec<
                         right: at(2),
                         bottom: at(3),
                     };
-                    let tab_hint = req.get("tab_hint").and_then(Value::as_bool).unwrap_or(false);
-                    let predicted_from = req.get("predicted_from").and_then(Value::as_u64).map(|n| n as usize);
-                    let shown = crate::uihost::show(items, cursor, rect, tab_hint, predicted_from);
+                    let index = |key: &str| req.get(key).and_then(Value::as_u64).map(|n| n as usize);
+                    let content = likhi_ui::Content {
+                        candidates: items,
+                        cursor,
+                        tab_hint: req.get("tab_hint").and_then(Value::as_bool).unwrap_or(false),
+                        predicted_from: index("predicted_from"),
+                        typed_at: index("typed_at"),
+                        tab_at: index("tab_at"),
+                    };
+                    let shown = crate::uihost::show(content, rect);
                     json!({"ok": true, "shown": shown})
                 }
                 #[cfg(windows)]
@@ -407,14 +487,22 @@ pub fn handle_request(svc: &SuggestService, tel: &Telemetry, raw: &[u8]) -> Vec<
                         .get("deadline_ms")
                         .and_then(Value::as_f64)
                         .unwrap_or(DEFAULT_DEADLINE_MS);
-                    let (cands, partial, strong) = svc.suggest(roman, &context, k, deadline);
+                    let words = sentence_context(&context, req.get("before").and_then(Value::as_str));
+                    let (cands, partial, strong) = svc.suggest(roman, &words, k, deadline);
+                    let (predicted, from_model) = svc.next_completions(roman, &context, req.get("before").and_then(Value::as_str));
+                    let (next, next_shares): (Vec<String>, Vec<f32>) = predicted.into_iter().unzip();
                     json!({
                         "ok": true,
                         "candidates": cands,
                         // Kept apart from `candidates` rather than merged in here: the keyboard
                         // decides where they go, and the ranking every golden test pins stays
                         // exactly what it was.
-                        "next": svc.next_completions(roman, &context),
+                        "next": next,
+                        // Parallel to `next`: two decimals are plenty for a threshold.
+                        "next_shares": next_shares.iter().map(|s| (s * 100.0).round() / 100.0).collect::<Vec<f32>>(),
+                        // Whether the neural model made those guesses. Only its guesses are sure
+                        // enough to show as gray text; the counted table's stay in the list.
+                        "next_model": from_model,
                         "partial": partial,
                         "strong": strong,
                         // Two decimals, as Python's round(x, 2) produces.
@@ -425,7 +513,7 @@ pub fn handle_request(svc: &SuggestService, tel: &Telemetry, raw: &[u8]) -> Vec<
                     let roman = req.get("roman").and_then(Value::as_str).unwrap_or("");
                     let chosen = req.get("chosen").and_then(Value::as_str).unwrap_or("");
                     let context = string_list(&req, "context");
-                    svc.learn(roman, chosen);
+                    svc.learn(roman, chosen, &context, req.get("before").and_then(Value::as_str));
                     // Whether first-letter prediction earns its place is how often the word taken
                     // was one it put on screen. Counted, never with the word.
                     if tel.mode != Mode::Off && req.get("predicted").and_then(Value::as_bool).unwrap_or(false) {
@@ -435,7 +523,7 @@ pub fn handle_request(svc: &SuggestService, tel: &Telemetry, raw: &[u8]) -> Vec<
                         let index = req.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
                         let top1 = match req.get("top1").and_then(Value::as_str) {
                             Some(t) if !t.is_empty() => t.to_string(),
-                            _ => svc.top_candidate(roman, &context, 5),
+                            _ => svc.top_candidate(roman, &sentence_context(&context, req.get("before").and_then(Value::as_str)), 5),
                         };
                         tel.commit(
                             roman,

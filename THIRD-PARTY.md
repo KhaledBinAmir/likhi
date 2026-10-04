@@ -14,6 +14,9 @@ before 0.2.0 they shipped PIME as the Text Services Framework host. None of thos
 more: the text service and the engine are Likhi's own native binaries. An upgrade removes the old
 `runtime` directory.
 
+Versions before 0.6.0 shipped IndicXlit (AI4Bharat, MIT) as the transliteration model. The Likhi
+model replaces it, and an upgrade removes `engine\models\indicxlit`.
+
 ## Statically linked into `engine\likhi-server.exe` and `shell\*\LikhiTextService.dll`
 
 Rust crates, compiled into the binaries. Versions are those in `engine/Cargo.lock` and
@@ -49,10 +52,18 @@ Derived artifacts, not the original datasets.
 
 | Artifact | Derived from | Licence |
 |---|---|---|
-| `indicxlit` | IndicXlit (AI4Bharat) | MIT |
+| `likhi` | the Likhi model: Likhi's own network, trained on BanglaTLit (MIT), Dakshina (CC BY-SA 4.0), Aksharantar (CC0 / CC-BY), Bengali Wikipedia via Dakshina (CC BY-SA 4.0) and the Somoy TV YouTube comments (CC BY 4.0) | CC BY-SA 4.0 as the strongest term of what it learnt from, attribution below |
 | `avro.json` | the rule tables of avro.py | MIT OR Apache-2.0 |
 | `lexicon` unigram counts and phonetic keys | Bengali Wikipedia via Dakshina (Google), OpenSubtitles frequency lists, BanglaTLit | CC BY-SA 4.0, attribution below |
 | `lexicon` romanization index | Dakshina (CC BY-SA 4.0), Aksharantar (CC0 / CC-BY), BanglaTLit (MIT) | CC BY-SA 4.0 as the strongest term |
+| `lexicon/spelling.lkx` | which of the lexicon's own words are correctly spelt: a mark on each, set where the Avro Phonetic dictionary or Hunspell's Bengali dictionary lists the word (or the word less a regular ending). Neither dictionary's word list is included | as the lexicon, CC BY-SA 4.0 |
+
+The spelling marks were computed with, and only with, these dictionaries; nothing of them is
+shipped beyond the yes or no for words Likhi already had:
+
+- Avro Phonetic dictionary, OpenBangla riti, https://github.com/OpenBangla/riti (MPL-2.0)
+- Hunspell Bengali (Bangladesh), LibreOffice dictionaries,
+  https://github.com/LibreOffice/dictionaries/tree/master/bn_BD (GPL-2.0)
 
 `avro.json` holds the rule tables of **avro.py**, converted to JSON by
 `scripts/build_rust_data.py`. The rules are data; the parser that reads them is Likhi's own port of
@@ -81,4 +92,11 @@ its own licence file in `<install dir>\fonts`.
 - BanglaTLit, https://github.com/farhanishmam/BanglaTLit
 - Aksharantar, AI4Bharat, https://huggingface.co/datasets/ai4bharat/Aksharantar
 
-Likhi is not affiliated with Avro Keyboard, OmicronLab, AI4Bharat, Google, or Microsoft.
+## Attribution for the CC BY parts
+
+- Bengali YouTube News Opinion Data (Somoy TV), version 4, Mendeley Data,
+  https://data.mendeley.com/datasets/3c3j3bkxvn/4 (CC BY 4.0). The Likhi model learnt which words
+  follow which from these comments; none of the comments is included.
+
+Likhi is not affiliated with Avro Keyboard, OmicronLab, OpenBangla, LibreOffice, Somoy TV,
+AI4Bharat, Google, or Microsoft.

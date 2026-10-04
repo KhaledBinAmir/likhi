@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 
 use likhi_engine::lexicon::write::write_table;
 use likhi_engine::romankey::{key_from_bangla, Level};
-use likhi_engine::textnorm::{canonical, has_bengali, match_key, normalize_roman};
+use likhi_engine::textnorm::{canonical, has_bengali, is_bengali_token_char, match_key, normalize_roman, tokens};
 
 /// Source bits recorded alongside each romanization, matching the Python's constants.
 const SRC_DAKSHINA: i8 = 1;
@@ -54,47 +54,7 @@ fn log(msg: &str) {
 }
 
 // --------------------------------------------------------------------------------- tokenising
-
-/// True for the Bengali block and the two joiners, which is the Python's character class
-/// `[U+0980-U+09FF, U+200C, U+200D]`.
-fn is_bengali_token_char(c: char) -> bool {
-    matches!(c, '\u{0980}'..='\u{09FF}' | '\u{200C}' | '\u{200D}')
-}
-
-/// True when a token is only digits and marks, which the Python drops with
-/// `^[U+09E6-U+09EF, U+0981-U+0983, U+09BC, U+09BE-U+09CD, U+09D7, U+200C, U+200D]+$`.
-fn is_all_digits_or_marks(s: &str) -> bool {
-    !s.is_empty()
-        && s.chars().all(|c| {
-            matches!(c,
-                '\u{09E6}'..='\u{09EF}'   // Bengali digits
-                | '\u{0981}'..='\u{0983}' // candrabindu, anusvara, visarga
-                | '\u{09BC}'              // nukta
-                | '\u{09BE}'..='\u{09CD}' // vowel signs through virama
-                | '\u{09D7}'              // au length mark
-                | '\u{200C}' | '\u{200D}')
-        })
-}
-
-/// Bengali word tokens of a line, canonicalised. Mirrors `build_lexicon.tokens`.
-fn tokens(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut current = String::new();
-    for c in text.chars() {
-        if is_bengali_token_char(c) {
-            current.push(c);
-        } else if !current.is_empty() {
-            if !is_all_digits_or_marks(&current) {
-                out.push(canonical(&current));
-            }
-            current.clear();
-        }
-    }
-    if !current.is_empty() && !is_all_digits_or_marks(&current) {
-        out.push(canonical(&current));
-    }
-    out
-}
+// `tokens` and `is_bengali_token_char` live in `textnorm`, shared with the next-word model.
 
 /// Strip leading and trailing punctuation, keeping the Bengali block and the joiners as word
 /// characters. Python's `\w` does not cover combining marks, so a naive strip would cut the final

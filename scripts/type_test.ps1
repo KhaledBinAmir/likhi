@@ -104,6 +104,12 @@ public static class Keys
     }
 
     [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+
+    // UI Automation reports positions in physical pixels; a click from a thread that is not DPI
+    // aware has its position scaled, and on a scaled display it lands somewhere else -- on this
+    // machine, 90 pixels low. Per-monitor aware (-4), both speak physical pixels.
+    public static void DpiAware() { SetThreadDpiAwarenessContext(new IntPtr(-4)); }
 
     // Win+Space, the input-method switch, pressed for real.
     public static void WinSpace()
@@ -275,7 +281,10 @@ public static class Wnd
     }
 
     // Whether a Likhi candidate window is on screen in the process that owns `hwnd`.
-    public static bool CandidatesVisible(IntPtr hwnd)
+    public static bool CandidatesVisible(IntPtr hwnd) { return OwnVisible(hwnd, "LikhiCandidateWindow"); }
+
+
+    static bool OwnVisible(IntPtr hwnd, string cls)
     {
         uint owner; GetWindowThreadProcessId(hwnd, out owner);
         bool shown = false;
@@ -283,7 +292,7 @@ public static class Wnd
         {
             var c = new StringBuilder(256); GetClassName(h, c, 256);
             uint pid; GetWindowThreadProcessId(h, out pid);
-            if (c.ToString() == "LikhiCandidateWindow" && IsWindowVisible(h) && pid == owner) { shown = true; return false; }
+            if (c.ToString() == cls && IsWindowVisible(h) && pid == owner) { shown = true; return false; }
             return true;
         }, IntPtr.Zero);
         return shown;
@@ -338,24 +347,6 @@ function Ask-Engine([string]$json) {
         $b = [Text.Encoding]::UTF8.GetBytes($json + "`n"); $s.Write($b, 0, $b.Length)
         return (New-Object IO.StreamReader($s, [Text.Encoding]::UTF8)).ReadLine()
     } finally { $c.Close() }
-}
-
-function Next-Word([string]$after) {
-    $req = @{ op = 'next'; context = @($after); k = 1; min_share = 0.2 } | ConvertTo-Json -Compress
-    $words = (Ask-Engine $req | ConvertFrom-Json).candidates
-    if ($words) { return $words[0] } else { return $null }
-}
-
-# The text service's placement rule for first-letter predictions (with_predictions in
-# shell/src/service.rs): up to two after the third entry, moved up if already lower.
-function Merge-Predictions($base, $predicted, [int]$k = 5) {
-    $list = New-Object System.Collections.Generic.List[string]
-    $head = @($base | Select-Object -First 3)
-    foreach ($w in $head) { $list.Add($w) }
-    $extra = @($predicted | Where-Object { $head -notcontains $_ } | Select-Object -First 2)
-    foreach ($w in $extra) { $list.Add($w) }
-    foreach ($w in @($base | Select-Object -Skip 3)) { if ($extra -notcontains $w) { $list.Add($w) } }
-    return @($list | Select-Object -First $k)
 }
 
 # One key of the per-user settings file, as the Likhi window writes it. The original bytes are
@@ -443,6 +434,36 @@ function Focus-Notepad { if (-not [Keys]::Focus($script:notepad)) { throw 'could
 
 function List-Shown { [Wnd]::CandidatesVisible($script:notepad) }
 
+# The Likhi window moves after it first appears -- it fits itself to the screen -- so its controls
+# are located only once it has stopped moving. Located earlier, a click meant for the "Try it here"
+# box landed on the usage-reporting checkbox below it and switched reporting, which restarts the
+# engine, in the middle of a run.
+function Wait-Settled([IntPtr]$hwnd) {
+    $el = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+    $last = $null
+    $deadline = (Get-Date).AddSeconds(5)
+    while ((Get-Date) -lt $deadline) {
+        $r = "$($el.Current.BoundingRectangle)"
+        if ($r -eq $last) { return }
+        $last = $r
+        Start-Sleep -Milliseconds 300
+    }
+}
+
+# Put the focus in `box` and confirm it is there. The click is posted to the box's own window rather
+# than made with the mouse, so it cannot land on any other control, whatever the display scaling:
+# a real click once hit the usage-reporting checkbox below the box, and switched reporting -- which
+# restarts the engine -- on every round of stress_switch. Nothing is typed unless the box has focus.
+function Click-Into($box, [IntPtr]$boxHwnd) {
+    $at = [IntPtr]((5 -shl 16) -bor 5)   # client (5, 5)
+    [void][Wnd]::PostMessage($boxHwnd, 0x0201, [IntPtr]1, $at)   # WM_LBUTTONDOWN, MK_LBUTTON
+    [void][Wnd]::PostMessage($boxHwnd, 0x0202, [IntPtr]::Zero, $at)   # WM_LBUTTONUP
+    Start-Sleep -Milliseconds 150
+    $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+    return ($focused -and [IntPtr]$focused.Current.NativeWindowHandle -eq $boxHwnd)
+}
+
+
 # --------------------------------------------------------------------------------------- checks
 
 $script:results = New-Object System.Collections.ArrayList
@@ -464,23 +485,71 @@ function Expect-True([string]$what, [bool]$value) {
     [void]$script:results.Add([pscustomobject]@{ Case = $script:current; Check = $what; Pass = $value; Expected = $true; Got = $value })
 }
 
-# A word that is followed by a next-word suggestion, found by typing candidates for real: the
-# suggestion depends on the engine's tables and threshold, so it is looked up rather than assumed.
+# The engine's answer for `roman` after the word `bangla`, typed at the start of a document, from
+# the neural model: the first question for a new sentence starts the model's work and is answered
+# from the counted table, so it is asked again until the model answers. $null without the model.
+function Suggest-Model([string]$roman, [string]$bangla, [int]$deadline) {
+    foreach ($try in 1..5) {
+        $req = @{ op = 'suggest'; roman = $roman; context = @($bangla); before = "$bangla "; k = 5; deadline_ms = $deadline } | ConvertTo-Json -Compress
+        $r = Ask-Engine $req | ConvertFrom-Json
+        if ($r.next_model) { return $r }
+        Start-Sleep -Milliseconds 30
+    }
+    return $null
+}
+
+# What Space commits for `roman` alone: the full ranking's first reading, as the keyboard re-asks.
+function First-Reading([string]$roman) {
+    $req = @{ op = 'suggest'; roman = $roman; context = @(); k = 5; deadline_ms = 400 } | ConvertTo-Json -Compress
+    return @((Ask-Engine $req | ConvertFrom-Json).candidates)[0]
+}
+
+$ROMANS = 'ami', 'tumi', 'kemon', 'ki', 'amar', 'apni', 'valo', 'ei', 'amra', 'kothay', 'ekta', 'ajke', 'tomar', 'khub'
+
+# Words after which the model is sure enough of the next to offer it after Space (next_word_min_share),
+# found by asking the engine: what the model says is looked up, never assumed. Phrases first, because
+# one word at the start of a text rarely makes it that sure: on held-out chat a sure guess came after
+# one Space in seventeen, mostly further into a sentence. Needs the model installed.
 $script:predictable = $null
 function Predictable {
     if ($script:predictable) { return $script:predictable }
-    foreach ($roman in 'kemon', 'ami', 'tumi', 'valo', 'ki', 'amar', 'apni', 'ei', 'shuvo', 'dhonnobad', 'kothay', 'ekta') {
-        Clear-Document
-        Send-Keys "$roman "
-        if (List-Shown) {
-            $bangla = (Text).TrimEnd(' ')
-            $script:predictable = @{ Roman = $roman; Bangla = $bangla; Next = (Next-Word $bangla) }
+    foreach ($roman in @('amar mone', 'ami tomake', 'tumi kemon', 'onek onek') + $ROMANS) {
+        $words = @($roman -split ' ' | ForEach-Object { First-Reading $_ })
+        $bangla = $words -join ' '
+        foreach ($try in 1..5) {
+            $req = @{ op = 'next'; context = $words; before = "$bangla "; k = 1; min_share = 0.5 } | ConvertTo-Json -Compress
+            $r = Ask-Engine $req | ConvertFrom-Json
+            if ($r.model) { break }
+        }
+        if ($r.model -and @($r.candidates).Count) {
+            $script:predictable = @{ Roman = $roman; Bangla = $bangla; Next = @($r.candidates)[0] }
             return $script:predictable
         }
     }
-    throw 'no candidate word produced a next-word suggestion'
+    throw 'the model offered no next word after any of the phrases tried: is it installed?'
 }
 
+# A word, and the next word's first letters, for which the model's guess is offered in the list:
+# sure enough, and not the reading Space would type anyway, whether the keyboard is showing the fast
+# answer or the full ranking.
+$script:guessable = $null
+function Guessable {
+    if ($script:guessable) { return $script:guessable }
+    foreach ($roman in $ROMANS) {
+        $bangla = First-Reading $roman
+        foreach ($letters in 'k', 'b', 'a', 't', 'h', 'e', 'j', 'd', 'p', 's', 'n', 'm') {
+            $full = Suggest-Model $letters $bangla 400
+            if (-not $full -or @($full.next).Count -eq 0 -or @($full.next_shares)[0] -lt 0.5) { continue }
+            $fast = Suggest-Model $letters $bangla 0
+            $guess = @($full.next)[0]
+            $firsts = @(@($full.candidates)[0], @($fast.candidates)[0])
+            if ($firsts -contains $guess) { continue }
+            $script:guessable = @{ Roman = $roman; Bangla = $bangla; Letters = $letters; Guess = $guess; Firsts = $firsts }
+            return $script:guessable
+        }
+    }
+    throw 'the model offered no guess for any first letters tried: is it installed?'
+}
 # ---------------------------------------------------------------------------------------- cases
 
 $cases = [ordered]@{
@@ -516,16 +585,6 @@ $cases = [ordered]@{
         Clear-Document; Send-Keys 'ami tumi'
         Click-DocumentStart
         Expect-Text "$AMI $TUMI"
-    }
-    # The guess straight after Space is off unless configured.
-    after_space_off_by_default = {
-        $w = Predictable
-        Set-UserSetting 'next_word_after_space' 'false'
-        Start-Sleep -Milliseconds 2500
-        Clear-Document; Send-Keys "$($w.Roman) "
-        Expect-List $false
-        Set-UserSetting 'next_word_after_space' 'true'
-        Start-Sleep -Milliseconds 2500
     }
     # The suggestion appears after Space, and Tab types it followed by a space.
     predict_tab = {
@@ -567,34 +626,24 @@ $cases = [ordered]@{
         Expect-Text "$($w.Bangla) ami "
         Expect-List $false
     }
-    # First-letter prediction: after the previous word and one letter, a word that usually follows
-    # is in the list at the position the placement rule gives -- fourth -- and its number types it.
-    predict_letter = {
-        $w = Predictable
-        $plan = $null
-        foreach ($letter in 'a', 'v', 'b', 'p', 'k', 's', 'e', 'o') {
-            $options = @(); $predicted = @()
-            foreach ($deadline in 0, 400) {
-                $req = @{ op = 'suggest'; roman = $letter; context = @($w.Bangla); k = 5; deadline_ms = $deadline } | ConvertTo-Json -Compress
-                $r = Ask-Engine $req | ConvertFrom-Json
-                $predicted += @($r.next)
-                $shown = Merge-Predictions @($r.candidates) @($r.next)
-                if ($shown.Count -ge 4 -and @($r.next) -contains $shown[3]) { $options += $shown[3] }
-            }
-            if ($options.Count) { $plan = @{ Letter = $letter; Predicted = @($predicted | Select-Object -Unique) }; break }
-        }
-        Expect-True "engine predicts after '$($w.Bangla)' + a letter" ([bool]$plan)
-        if (-not $plan) { return }
-        Clear-Document; Send-Keys "$($w.Roman) $($plan.Letter)4"
-        $got = (Text)
-        # Any of the engine's predictions: which one lands fourth depends on whether the keyboard
-        # was showing the fast answer or the full ranking, and the test cannot see which. What it
-        # checks is the placement -- that the fourth entry is a prediction and its number types it.
-        $ok = $false
-        foreach ($p in $plan.Predicted) { if ($got -ceq "$($w.Bangla) $p") { $ok = $true } }
-        [void]$script:results.Add([pscustomobject]@{ Case = $script:current; Check = 'a prediction typed'; Pass = $ok; Expected = (Show "$($w.Bangla) $($plan.Predicted -join '|')"); Got = (Show $got) })
+    # While the next word's first letters are typed, the model's guess is in the list, marked Tab,
+    # and Tab takes it in place of what was typed.
+    tab_takes_the_guess = {
+        $g = Guessable
+        Clear-Document; Send-Keys "$($g.Roman) $($g.Letters)"
+        Expect-List $true
+        Send-Keys '{TAB}'
+        Expect-Text "$($g.Bangla) $($g.Guess) "
     }
-    # The caret moved without a key (a click): Tab must not drop the word somewhere else.
+    # Space never takes the guess: it types the first reading of what was typed, as always.
+    space_types_the_first_reading = {
+        $g = Guessable
+        Clear-Document; Send-Keys "$($g.Roman) $($g.Letters) "
+        $got = Text
+        $ok = $false
+        foreach ($first in $g.Firsts) { if ($got -ceq "$($g.Bangla) $first ") { $ok = $true } }
+        [void]$script:results.Add([pscustomobject]@{ Case = $script:current; Check = 'first reading typed'; Pass = $ok; Expected = (Show "$($g.Bangla) $($g.Firsts -join '|') "); Got = (Show $got) })
+    }    # The caret moved without a key (a click): Tab must not drop the word somewhere else.
     predict_caret_moved = {
         $w = Predictable
         Clear-Document; Send-Keys "$($w.Roman) "
@@ -666,12 +715,15 @@ $cases = [ordered]@{
         $deadline = (Get-Date).AddSeconds(15)
         while ($app.MainWindowHandle -eq [IntPtr]::Zero -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200; $app.Refresh() }
         $win = $app.MainWindowHandle
+        Wait-Settled $win
         $box = [System.Windows.Automation.AutomationElement]::FromHandle($win).FindAll(
             [System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) |
             Where-Object { $_.Current.ClassName -like 'WindowsForms10.EDIT*' } | Select-Object -First 1
         $boxHwnd = [IntPtr]$box.Current.NativeWindowHandle
         if (-not [Keys]::Focus($win)) { throw 'could not focus the Likhi window' }
-        $r = $box.Current.BoundingRectangle; [Keys]::Click([int]($r.Left + $r.Width / 2), [int]($r.Top + $r.Height / 2))
+        $inBox = Click-Into $box $boxHwnd
+        Expect-True 'clicked into the Try it here box' $inBox
+        if (-not $inBox) { [void]$app.CloseMainWindow(); return }
         [Ime]::ActivateLikhi(); Start-Sleep -Milliseconds 800
         Send-Keys 'ami '
         Start-Sleep -Milliseconds 300
@@ -690,6 +742,7 @@ $cases = [ordered]@{
         $win = $app.MainWindowHandle
         Expect-True 'Likhi window opened' ($win -ne [IntPtr]::Zero)
         if ($win -eq [IntPtr]::Zero) { return }
+        Wait-Settled $win
         # Windows Forms reports every control as a pane, so the box is found by its window class.
         $box = [System.Windows.Automation.AutomationElement]::FromHandle($win).FindAll(
             [System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) |
@@ -699,7 +752,7 @@ $cases = [ordered]@{
         $boxHwnd = [IntPtr]$box.Current.NativeWindowHandle
         $boxText = { ([Wnd]::TextOf($boxHwnd) -replace "`r`n", "`n") }
         # Focus by clicking into it: UI Automation cannot focus a Windows Forms pane.
-        $clickBox = { $r = $box.Current.BoundingRectangle; [Keys]::Click([int]($r.Left + $r.Width / 2), [int]($r.Top + $r.Height / 2)) }
+        $clickBox = { Click-Into $box $boxHwnd }
         Clear-Document
         $fails = @(); $slowest = 0; $wrongLang = 0; $vanished = 0
         # The input method is global by default: one Win+Space switches it for every application.
@@ -709,7 +762,7 @@ $cases = [ordered]@{
             $toNotepad = ($round % 2) -eq 1
             $target = if ($toNotepad) { $script:notepad } else { $win }
             if (-not [Keys]::Focus($target)) { $fails += "round ${round}: could not focus"; continue }
-            if (-not $toNotepad) { & $clickBox }
+            if (-not $toNotepad -and -not (& $clickBox)) { $fails += "round ${round}: the click did not reach the Try it here box; nothing typed"; continue }
             # A burst of 1 to 4 real Win+Space presses, 30 ms apart, straight after arriving.
             $presses = $rng.Next(1, 5)
             foreach ($i in 1..$presses) { [Keys]::WinSpace(); Start-Sleep -Milliseconds 30 }
@@ -779,6 +832,7 @@ $cases = [ordered]@{
 
 # ------------------------------------------------------------------------------------------ run
 
+[Keys]::DpiAware()
 $scratch = Join-Path $env:TEMP 'likhi-type-test.txt'
 [IO.File]::WriteAllText($scratch, '')
 $savedConfig = if (Test-Path $userConfig) { [IO.File]::ReadAllBytes($userConfig) } else { $null }
@@ -788,8 +842,6 @@ $script:notepad = [IntPtr]::Zero
 try {
     Set-UserSetting 'telemetry' '"off"'
     Set-UserSetting 'next_word' 'true'
-    # Off by default since 0.5.2 but still shipped behind the setting, so still tested.
-    Set-UserSetting 'next_word_after_space' 'true'
     Stop-Engine
     # With the engine stopped, so the dictionary's files are complete and not being written.
     foreach ($f in $personal) { $savedPersonal[$f] = if (Test-Path $f) { [IO.File]::ReadAllBytes($f) } else { $null } }

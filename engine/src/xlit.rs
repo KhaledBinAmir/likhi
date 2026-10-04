@@ -22,6 +22,15 @@ use std::path::Path;
 use crate::tensor::{add_inplace, attention, gelu_inplace, layer_norm, log_softmax_inplace, matmul_bias, relu_inplace};
 use crate::weights::{Arr, Meta, WeightError, Weights};
 
+/// The Likhi model's source tokens: its two modes, the separator
+/// between the sentence so far and the letters, and how many words of the sentence it reads.
+const MODE_TRANSLITERATE: &str = "__t__";
+const MODE_COMPLETE: &str = "__c__";
+const CONTEXT_SEPARATOR: &str = "|";
+pub const CONTEXT_WORDS: usize = 3;
+/// The longest word completion mode will write, in characters: past the longest common words.
+const COMPLETE_MAX_LEN: usize = 24;
+
 #[derive(Clone, Copy)]
 struct Attn {
     /// Fused [q|k|v] projection with the attention scaling already folded into the q columns.
@@ -69,6 +78,9 @@ pub struct EncKv {
     k: Vec<Vec<f32>>,
     v: Vec<Vec<f32>>,
     src_len: usize,
+    /// The encoder's output at the context separator, for the word head; empty when the model has
+    /// no word head or the source no separator.
+    sep_state: Vec<f32>,
 }
 
 /// One beam's incremental self-attention cache, growing by `dim` per decoded step.
@@ -102,6 +114,146 @@ pub struct Xlit {
     enc_layers: Vec<EncLayer>,
     dec_layers: Vec<DecLayer>,
     gelu: bool,
+    /// The Likhi model's word head, `[dim, words]` and `[words]`, and its words (canonical): the
+    /// next-word and completion distribution. Empty for a model without one, or one whose head is
+    /// in `word_head.lkq` instead (`head_q8`).
+    word_head: (Arr, Arr),
+    head_q8: Option<HeadQ8>,
+    /// A model that reads its context words whole (`Meta::word_context`): one vector a word,
+    /// `[words, dim]`, which is also its word head, tied. Empty when it is in `head_q8` instead.
+    word_embed: Arr,
+    words: Vec<String>,
+    word_index: HashMap<String, usize>,
+}
+
+/// The word head in 8 bits, `word_head.lkq`: a row of `i8` and a scale for each word, as the
+/// next-word LSTM keeps its embedding -- a quarter of the size of the floats, scored with the
+/// same integer dot product. Layout, little-endian:
+///
+/// ```text
+/// magic b"LKQ1", version u32 = 1, words u32, dim u32, temperature f32 (0: none), (pad to 64)
+/// scale f32[words], bias f32[words], q i8[words * dim]
+/// ```
+///
+/// The temperature divides the scores: a model can be surer of its first guess than it has
+/// reason to be, and the Tab guess is shown by its share, so the share must mean what it says.
+/// Fitted on held-out text (`set_word_head_temperature`).
+pub struct HeadQ8 {
+    map: memmap2::Mmap,
+    words: usize,
+    dim: usize,
+    temperature: f32,
+}
+
+const HEAD_MAGIC: &[u8; 4] = b"LKQ1";
+const HEAD_DATA: usize = 64;
+
+impl HeadQ8 {
+    fn open(path: &Path, words: usize, dim: usize) -> Result<HeadQ8, XlitError> {
+        let file = std::fs::File::open(path)?;
+        // SAFETY: read-only mapping, never written through, as in weights.rs.
+        let map = unsafe { memmap2::Mmap::map(&file)? };
+        let bad = |m: &str| XlitError::Vocab(format!("{}: {m}", path.display()));
+        if map.len() < 16 || &map[..4] != HEAD_MAGIC {
+            return Err(bad("not an LKQ1 file"));
+        }
+        let u32_at = |i: usize| u32::from_le_bytes([map[i], map[i + 1], map[i + 2], map[i + 3]]) as usize;
+        if u32_at(4) != 1 {
+            return Err(bad("unknown version"));
+        }
+        if u32_at(8) != words || u32_at(12) != dim {
+            return Err(bad("its shape does not match the model and word_vocabulary.json"));
+        }
+        if map.len() != HEAD_DATA + 8 * words + words * dim {
+            return Err(bad("wrong length"));
+        }
+        let t = f32::from_le_bytes([map[16], map[17], map[18], map[19]]);
+        let temperature = if t.is_finite() && t > 0.0 { t } else { 1.0 };
+        Ok(HeadQ8 { map, words, dim, temperature })
+    }
+
+    fn f32s(&self, at: usize) -> &[f32] {
+        // SAFETY: the length was checked in `open`, the mapping is page-aligned and HEAD_DATA is a
+        // multiple of 4, and f32 has no invalid bit patterns.
+        unsafe { std::slice::from_raw_parts(self.map.as_ptr().add(at) as *const f32, self.words) }
+    }
+
+    /// One word's vector, back in floats: a context word read whole.
+    fn row(&self, j: usize) -> Vec<f32> {
+        let scale = self.f32s(HEAD_DATA)[j];
+        let at = HEAD_DATA + 8 * self.words + j * self.dim;
+        self.map[at..at + self.dim].iter().map(|b| f32::from(*b as i8) * scale).collect()
+    }
+
+    fn scores(&self, x: &[f32]) -> Vec<f32> {
+        let scale = self.f32s(HEAD_DATA);
+        let bias = self.f32s(HEAD_DATA + 4 * self.words);
+        let q_at = HEAD_DATA + 8 * self.words;
+        // SAFETY: as above; any byte is a valid i8.
+        let q = unsafe { std::slice::from_raw_parts(self.map.as_ptr().add(q_at) as *const i8, self.words * self.dim) };
+        let (xq, xs) = crate::nextlm::quantize_i16(x);
+        let t = self.temperature;
+        (0..self.words)
+            .map(|j| (crate::nextlm::dot_i8_i16(&q[j * self.dim..(j + 1) * self.dim], &xq) as f32 * xs * scale[j] + bias[j]) / t)
+            .collect()
+    }
+}
+
+/// Set the word head's temperature in `dir/word_head.lkq` (see `HeadQ8`); 1 removes it.
+pub fn set_word_head_temperature(dir: &Path, temperature: f32) -> Result<(), XlitError> {
+    use std::io::{Seek, SeekFrom, Write};
+    let path = dir.join("word_head.lkq");
+    let mut f = std::fs::OpenOptions::new().read(true).write(true).open(&path)?;
+    let mut magic = [0u8; 4];
+    std::io::Read::read_exact(&mut f, &mut magic)?;
+    if &magic != HEAD_MAGIC {
+        return Err(XlitError::Vocab(format!("{}: not an LKQ1 file", path.display())));
+    }
+    f.seek(SeekFrom::Start(16))?;
+    f.write_all(&temperature.to_le_bytes())?;
+    Ok(())
+}
+
+/// Turn an exported model's word head into `word_head.lkq` and drop the floats from `model.lkw`,
+/// in place: 20,000 words of a 256-wide model are 20 MB as floats, 5 MB like this. Returns the
+/// size of model.lkw before and after.
+pub fn quantize_word_head(dir: &Path) -> Result<(u64, u64), XlitError> {
+    let lkw = dir.join("model.lkw");
+    let before = std::fs::metadata(&lkw)?.len();
+    // A word-aware model's one table, a word a row; otherwise the head alone, a word a column.
+    let tied = Weights::open(&lkw)?.names().any(|n| n == "word_embed");
+    let (q, dim, words) = {
+        let w = Weights::open(&lkw)?;
+        let (hw, hb) = (w.arr(if tied { "word_embed" } else { "word_head_w" })?, w.arr("word_head_b")?);
+        let (dim, words) = if tied { (hw.cols, hw.rows) } else { (hw.rows, hw.cols) };
+        let (m, b) = (w.get(hw), w.get(hb));
+        let at = |j: usize, i: usize| if tied { m[j * dim + i] } else { m[i * words + j] };
+        let mut scale = vec![0.0f32; words];
+        let mut q = vec![0i8; words * dim];
+        for j in 0..words {
+            let max = (0..dim).map(|i| at(j, i).abs()).fold(0.0f32, f32::max);
+            scale[j] = if max > 0.0 { max / 127.0 } else { 1.0 };
+            for i in 0..dim {
+                q[j * dim + i] = (at(j, i) / scale[j]).round().clamp(-127.0, 127.0) as i8;
+            }
+        }
+        let mut out = Vec::with_capacity(HEAD_DATA + 8 * words + words * dim);
+        out.extend_from_slice(HEAD_MAGIC);
+        for v in [1u32, words as u32, dim as u32] {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out.resize(HEAD_DATA, 0);
+        for v in scale.iter().chain(b) {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out.extend(q.iter().map(|v| *v as u8));
+        (out, dim, words)
+    };
+    std::fs::write(dir.join("word_head.lkq"), q)?;
+    crate::weights::rewrite_without(&lkw, &["word_head_w", "word_head_b", "word_embed"])?;
+    let after = std::fs::metadata(&lkw)?.len();
+    debug_assert!(dim > 0 && words > 0);
+    Ok((before, after))
 }
 
 #[derive(Debug)]
@@ -151,6 +303,8 @@ impl Xlit {
         let tgt_index: HashMap<String, usize> =
             tgt_vocab.iter().enumerate().map(|(i, t)| (t.clone(), i)).collect();
 
+        let words =
+            if dir.join("word_vocabulary.json").exists() { load_vocab(&dir.join("word_vocabulary.json"))? } else { Vec::new() };
         let need = |m: &HashMap<String, usize>, t: &str| -> Result<usize, XlitError> {
             m.get(t).copied().ok_or_else(|| XlitError::Vocab(format!("no {t} token")))
         };
@@ -187,6 +341,14 @@ impl Xlit {
             dec_ln: (w.arr_opt("dec_ln_g"), w.arr_opt("dec_ln_b")),
             banned: w.arr("banned")?,
             gelu: meta.activation.starts_with("gelu"),
+            word_head: (w.arr_opt("word_head_w"), w.arr_opt("word_head_b")),
+            head_q8: match (dir.join("word_head.lkq").exists(), words.len()) {
+                (true, n) if n > 0 => Some(HeadQ8::open(&dir.join("word_head.lkq"), n, meta.dim)?),
+                _ => None,
+            },
+            word_embed: w.arr_opt("word_embed"),
+            word_index: words.iter().enumerate().map(|(i, w)| (w.clone(), i)).collect(),
+            words,
             enc_layers,
             dec_layers,
             src_vocab,
@@ -283,6 +445,81 @@ impl Xlit {
         ids
     }
 
+    /// Whether this model reads the sentence before the word. The Likhi model does; IndicXlit, which
+    /// knows only the letters, does not. Told apart by the source vocabulary: only the Likhi model
+    /// has the mode tokens.
+    pub fn reads_context(&self) -> bool {
+        self.src_index.contains_key(MODE_TRANSLITERATE)
+    }
+
+    /// The Likhi model's source, exactly as it was trained on: the mode --
+    /// `complete` asks for the word these letters begin, otherwise the letters as typed -- then up
+    /// to `CONTEXT_WORDS` words before, canonical Bangla separated by spaces, the separator, the
+    /// letters, and `</s>`.
+    pub fn encode_source_ctx(&self, complete: bool, context: &[String], roman: &str) -> Vec<usize> {
+        let id = |s: &str| self.src_index.get(s).copied().unwrap_or(self.src_unk);
+        let mut ids = vec![id(if complete { MODE_COMPLETE } else { MODE_TRANSLITERATE })];
+        let start = context.len().saturating_sub(CONTEXT_WORDS);
+        // The context words whole, right after the mode: ids past the character vocabulary, a word
+        // the table lacks as its last entry, `<unk>`.
+        if self.meta.word_context && !self.words.is_empty() {
+            let unk = self.words.len() - 1;
+            for w in &context[start..] {
+                let wid = self.word_index.get(&crate::textnorm::canonical(w)).copied().unwrap_or(unk);
+                ids.push(self.src_vocab.len() + wid);
+            }
+        }
+        let mut buf = [0u8; 4];
+        for ch in context[start..].join(" ").chars() {
+            ids.push(id(ch.encode_utf8(&mut buf)));
+        }
+        ids.push(id(CONTEXT_SEPARATOR));
+        for ch in roman.chars() {
+            ids.push(id(ch.encode_utf8(&mut buf)));
+        }
+        ids.push(self.src_eos);
+        ids
+    }
+
+    /// The word head's words, canonical, in the order `word_scores` scores them. Empty without one.
+    pub fn words(&self) -> &[String] {
+        &self.words
+    }
+
+    fn has_word_head(&self) -> bool {
+        self.head_q8.is_some() || !self.word_head.0.is_empty() || !self.word_embed.is_empty()
+    }
+
+    /// The word head's raw scores for every word in `words`, from an encoding of the completion
+    /// mode: higher is likelier, and a softmax over them is the next-word distribution. None for a
+    /// model without a word head, or an encoding without a separator.
+    pub fn word_scores(&self, enc: &EncKv) -> Option<Vec<f32>> {
+        if !self.has_word_head() || enc.sep_state.is_empty() {
+            return None;
+        }
+        if let Some(h) = &self.head_q8 {
+            return Some(h.scores(&enc.sep_state));
+        }
+        if !self.word_embed.is_empty() {
+            // Tied: each word's score is its own vector against the state, plus its bias.
+            let bias = self.w.get(self.word_head.1);
+            return Some(
+                (0..self.word_embed.rows)
+                    .map(|j| self.w.row(self.word_embed, j).iter().zip(&enc.sep_state).map(|(a, b)| a * b).sum::<f32>() + bias[j])
+                    .collect(),
+            );
+        }
+        let n = self.word_head.0.cols;
+        let mut out = vec![0.0f32; n];
+        matmul_bias(&enc.sep_state, 1, self.dim(), self.w.get(self.word_head.0), n, Some(self.w.get(self.word_head.1)), &mut out);
+        Some(out)
+    }
+
+    /// `encode`, for the Likhi model: the encoder's view of the sentence so far and the letters.
+    pub fn encode_ctx(&self, complete: bool, context: &[String], roman: &str) -> EncKv {
+        self.encode_ids(&self.encode_source_ctx(complete, context, roman))
+    }
+
     /// Optional layer norm: applied when the checkpoint carries one, skipped when it does not.
     fn maybe_ln(&self, ln: (Arr, Arr), x: &mut Vec<f32>, rows: usize, scratch: &mut Vec<f32>) {
         if ln.0.is_empty() {
@@ -328,8 +565,17 @@ impl Xlit {
         let scale = self.meta.embed_scale;
 
         let mut x = vec![0.0f32; t * dim];
+        let n_src = self.src_vocab.len();
         for (i, &id) in src_ids.iter().enumerate() {
-            let emb = self.w.row(self.enc_embed, id);
+            let emb: std::borrow::Cow<[f32]> = if id < n_src {
+                self.w.row(self.enc_embed, id).into()
+            } else {
+                // A context word, whole (encode_source_ctx).
+                match &self.head_q8 {
+                    Some(h) => h.row(id - n_src).into(),
+                    None => self.w.row(self.word_embed, id - n_src).into(),
+                }
+            };
             let pos = self.w.row(self.pos, self.meta.pos_offset + i);
             let row = &mut x[i * dim..(i + 1) * dim];
             for j in 0..dim {
@@ -373,6 +619,13 @@ impl Xlit {
             self.ffn_block(&layer.ffn, &mut x, t);
         }
         self.maybe_ln(self.enc_ln, &mut x, t, &mut scratch);
+        let sep_state = match (self.has_word_head(), self.src_index.get(CONTEXT_SEPARATOR)) {
+            (true, Some(sep)) => match src_ids.iter().position(|id| id == sep) {
+                Some(at) => x[at * dim..(at + 1) * dim].to_vec(),
+                None => Vec::new(),
+            },
+            _ => Vec::new(),
+        };
 
         let mut ek = Vec::with_capacity(self.dec_layers.len());
         let mut ev = Vec::with_capacity(self.dec_layers.len());
@@ -385,7 +638,7 @@ impl Xlit {
             ek.push(kk);
             ev.push(vv);
         }
-        EncKv { k: ek, v: ev, src_len: t }
+        EncKv { k: ek, v: ev, src_len: t, sep_state }
     }
 
     /// One decoder step for every live hypothesis at once. Appends to each cache and returns
@@ -729,9 +982,19 @@ impl Xlit {
         if roman.is_empty() {
             return Vec::new();
         }
+        self.beam_search_upto(std::cmp::min(60, 3 * roman.chars().count() + 5), beam, nbest, enc)
+    }
+
+    /// Beam search for the Likhi model's completion mode: the word the letters begin, or with no
+    /// letters the next word. The letters say little about how long the word is, so the bound is
+    /// the length of a long word rather than a multiple of what was typed.
+    pub fn beam_search_complete(&self, beam: usize, nbest: usize, enc: &EncKv) -> Vec<(String, f32)> {
+        self.beam_search_upto(COMPLETE_MAX_LEN, beam, nbest, enc)
+    }
+
+    fn beam_search_upto(&self, max_len: usize, beam: usize, nbest: usize, enc: &EncKv) -> Vec<(String, f32)> {
         let vsize = self.vocab_size();
         let banned = self.w.get(self.banned);
-        let max_len = std::cmp::min(60, 3 * roman.chars().count() + 5);
         let lenpen = 1.0f32;
 
         let mut tokens = vec![self.eos];

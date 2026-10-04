@@ -5,9 +5,13 @@
 Produces the whole engine side of the product:
 
     dist/engine/likhi-server.exe        the server
-    dist/engine/models/lexicon/*.lkx    the tables
-    dist/engine/models/indicxlit/*      the transliteration model
+    dist/engine/models/lexicon/*.lkx    the tables, spelling.lkx among them
+    dist/engine/models/likhi/*          the Likhi model: transliteration in context, completion and
+                                        the next word, one network
     dist/engine/models/avro.json        the rule tables
+
+With the Likhi model in `models/rust/likhi`, IndicXlit (`models/rust/indicxlit`) stays behind: the
+engine would never read it. Without it, IndicXlit ships as before.
 
 This replaces `build_runtime.py`, which packaged an embedded CPython, NumPy, marisa-trie and the
 Likhi package -- about 65 MB and a 630 ms cold start -- to run the same engine. The Python is still
@@ -93,7 +97,8 @@ def main() -> None:
     if not exe.exists():
         raise SystemExit(f"missing {exe}")
 
-    if not (args.data / "indicxlit" / "model.lkw").exists():
+    likhi_model = (args.data / "likhi" / "model.lkw").exists()
+    if not likhi_model and not (args.data / "indicxlit" / "model.lkw").exists():
         raise SystemExit(
             f"missing converted data in {args.data}; run scripts/build_rust_data.py first"
         )
@@ -106,8 +111,9 @@ def main() -> None:
     log(f"likhi-server.exe: {exe.stat().st_size / 1e6:.1f} MB")
 
     models = args.out / "models"
-    shutil.copytree(args.data, models, ignore=shutil.ignore_patterns("__pycache__", "*.part"))
-    log(f"models: {sizeof(models)}")
+    skip = ["__pycache__", "*.part"] + (["indicxlit"] if likhi_model else [])
+    shutil.copytree(args.data, models, ignore=shutil.ignore_patterns(*skip))
+    log(f"models: {sizeof(models)} ({'the Likhi model' if likhi_model else 'IndicXlit'})")
 
     log(f"built {args.out} ({sizeof(args.out)})")
 

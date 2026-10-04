@@ -48,6 +48,12 @@ struct CachedCandidate {
     xlit_logp: Option<f64>,
     avro: bool,
     in_lexicon: bool,
+    /// The bigram term's evidence for this word after the item's previous word, for items cached
+    /// with their sentence; absent for isolated words, which then have no bigram term at all.
+    #[serde(default)]
+    bigram: Option<f64>,
+    #[serde(default)]
+    spelled: bool,
 }
 
 impl CachedCandidate {
@@ -64,6 +70,7 @@ impl CachedCandidate {
             xlit_logp: self.xlit_logp.unwrap_or(f64::NAN),
             avro: self.avro,
             in_lexicon: self.in_lexicon,
+            spelled: self.spelled,
             ..Default::default()
         }
     }
@@ -98,6 +105,10 @@ fn log(msg: &str) {
 
 // ------------------------------------------------------------------------------------- caching
 
+/// One item to cache: its set, the roman, the golds (match keys), its weight, and the words before
+/// it -- empty for an isolated word.
+type Work = (String, String, Vec<String>, f64, Vec<String>);
+
 fn cmd_cache(datasets: &[String], model_scored: usize, threads: usize) -> Result<(), Box<dyn std::error::Error>> {
     let repo = repo();
     let dir = std::env::var_os("LIKHI_MODELS")
@@ -108,13 +119,33 @@ fn cmd_cache(datasets: &[String], model_scored: usize, threads: usize) -> Result
         EngineOptions { personal: None, ..Default::default() },
     )?);
 
-    let mut work: Vec<(String, String, Vec<String>, f64)> = Vec::new();
+    let mut work: Vec<Work> = Vec::new();
     for spec in datasets {
         // name[:sample]
         let (name, sample) = match spec.split_once(':') {
             Some((n, s)) => (n, s.parse::<usize>().ok()),
             None => (spec.as_str(), None),
         };
+        // `banglatlit-<split>-ctx`: every chat word with the sentence before it, so the model is
+        // scored as it reads while typing and the bigram weight can be tuned at all.
+        if let Some(split) = name.strip_prefix("banglatlit-").and_then(|s| s.strip_suffix("-ctx")) {
+            use likhi_engine::textnorm::to_output;
+            let (rows, _) = likhi_engine::evalkit::sentences::aligned_banglatlit(&repo, split)?;
+            let mut items: Vec<Work> = Vec::new();
+            for (bn, rom) in &rows {
+                for i in 0..bn.len() {
+                    let ctx: Vec<String> = bn[i.saturating_sub(3)..i].iter().map(|w| to_output(w)).collect();
+                    items.push((name.to_string(), rom[i].clone(), vec![match_key(&bn[i])], 1.0, ctx));
+                }
+            }
+            if let Some(n) = sample {
+                let stride = items.len().div_ceil(n.max(1));
+                items = items.into_iter().step_by(stride.max(1)).take(n).collect();
+            }
+            log(&format!("{name}: {} items", items.len()));
+            work.extend(items);
+            continue;
+        }
         let ws = load_wordset(&repo, name)?;
         let mut items = ws.items;
         if let Some(n) = sample {
@@ -131,6 +162,7 @@ fn cmd_cache(datasets: &[String], model_scored: usize, threads: usize) -> Result
                 it.roman,
                 it.golds.iter().map(|g| match_key(g)).collect(),
                 it.weight,
+                Vec::new(),
             ));
         }
     }
@@ -161,10 +193,13 @@ fn cmd_cache(datasets: &[String], model_scored: usize, threads: usize) -> Result
                 if i >= work.len() {
                     return out;
                 }
-                let (set, roman, golds, weight) = &work[i];
-                let table = engine
-                    .candidates_with(roman, true, &opts, None)
-                    .expect("no abort flag");
+                let (set, roman, golds, weight, context) = &work[i];
+                let table = if context.is_empty() {
+                    engine.candidates_with(roman, true, &opts, None).expect("no abort flag")
+                } else {
+                    engine.candidates_with_context(roman, context, true, &opts)
+                };
+                let prev: Vec<String> = context.last().map(|c| vec![likhi_engine::textnorm::canonical(c)]).unwrap_or_default();
                 let cands = table
                     .iter()
                     .map(|(word, ft)| CachedCandidate {
@@ -181,6 +216,8 @@ fn cmd_cache(datasets: &[String], model_scored: usize, threads: usize) -> Result
                         xlit_logp: if ft.xlit_logp.is_nan() { None } else { Some(ft.xlit_logp) },
                         avro: ft.avro,
                         in_lexicon: ft.in_lexicon,
+                        bigram: (!prev.is_empty()).then(|| engine.context_adjust(word, &prev)),
+                        spelled: ft.spelled,
                     })
                     .collect();
                 out.push((
@@ -248,7 +285,9 @@ fn evaluate(rows: &[CachedItem], w: &Weights, metric: &str) -> (HashMap<String, 
     for row in rows {
         scratch.clear();
         for (i, c) in row.cands.iter().enumerate() {
-            scratch.push((score_features(&c.word, &c.to_feats(), c.uni, w), i));
+            // The bigram term exactly as the engine adds it (`score_inner`), where there is one.
+            let bigram = c.bigram.map_or(0.0, |b| w.get("bigram") * b);
+            scratch.push((score_features(&c.word, &c.to_feats(), c.uni, w) + bigram, i));
         }
         // Descending score; ties keep candidate order, as Python's stable `sorted` does.
         scratch.sort_by(|a, b| {
@@ -277,8 +316,9 @@ fn evaluate(rows: &[CachedItem], w: &Weights, metric: &str) -> (HashMap<String, 
     (out, macro_avg)
 }
 
-/// The search grid, copied from the Python. Only these weights are tuned; the personal and bigram
-/// terms are not, because the dev sets have no personal history and no sentence context.
+/// The search grid, copied from the Python, plus the bigram weight. The personal terms are not
+/// tuned, because the dev sets have no personal history; the bigram term only moves on sets cached
+/// with their sentences (`banglatlit-<split>-ctx`), and is inert on the rest.
 const GRID: &[(&str, &[f64])] = &[
     ("unigram", &[0.5, 0.75, 1.0, 1.25, 1.5]),
     ("rom_exact", &[0.0, 1.0, 2.0, 3.0, 4.0, 6.0]),
@@ -293,6 +333,7 @@ const GRID: &[(&str, &[f64])] = &[
     ("xlit_top3", &[0.0, 0.5, 1.0, 2.0]),
     ("avro", &[0.0, 0.5, 1.0, 2.0]),
     ("oov", &[-6.0, -4.0, -3.0, -2.0, -1.0, 0.0]),
+    ("bigram", &[0.0, 0.25, 0.5, 0.7, 1.0, 1.5]),
 ];
 
 fn show(per_set: &HashMap<String, f64>, macro_avg: f64) -> String {

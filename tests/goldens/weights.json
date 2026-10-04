@@ -1,0 +1,21 @@
+{
+ "unigram": 0.5,
+ "rom_exact": 2.5,
+ "rom_exact_log": 0.8,
+ "rom_exact_fast": 2.5,
+ "rom_prefix": 0.3,
+ "key_fine": 2.0,
+ "key_coarse": 1.2,
+ "key_prefix": 0.0,
+ "gap": 0.0,
+ "xlit_logp": 0.5,
+ "xlit_top1": 1.0,
+ "xlit_top3": 1.0,
+ "avro": 0.0,
+ "oov": -6.0,
+ "personal_sel": 5.0,
+ "personal_word": 0.6,
+ "bigram": 0.7,
+ "latin_base": -6.0,
+ "latin": 0.0
+}

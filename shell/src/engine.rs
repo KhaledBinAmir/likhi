@@ -74,6 +74,10 @@ pub struct Suggestion {
     /// First-letter prediction: words that usually follow the previous word and fit the letters
     /// typed so far. Separate from `candidates`; the text service decides where they go.
     pub next: Vec<String>,
+    /// Each prediction's share of the likely words that fit the letters, parallel to `next`.
+    pub next_shares: Vec<f32>,
+    /// The predictions came from the downloaded neural model, not the counted table.
+    pub next_model: bool,
 }
 
 /// What the engine is told when a word is committed, so it can learn and the pilot can count.
@@ -98,6 +102,9 @@ pub struct Commit<'a> {
     pub latency_ms: Option<f64>,
     /// The word taken was one first-letter prediction put on the list.
     pub predicted: bool,
+    /// The document's text just before the word, when it could be read: what the next-word model
+    /// reads as the sentence so far. Used in the engine's memory and never kept or reported.
+    pub before: Option<&'a str>,
 }
 
 #[derive(Deserialize)]
@@ -111,6 +118,10 @@ struct Reply {
     strong: bool,
     #[serde(default)]
     next: Vec<String>,
+    #[serde(default)]
+    next_shares: Vec<f32>,
+    #[serde(default)]
+    next_model: bool,
     #[serde(default)]
     error: Option<String>,
 }
@@ -594,10 +605,13 @@ impl Engine {
         Err(last_error.expect("two attempts, at least one error"))
     }
 
+    /// Candidates for `roman`, typed after the committed words `context` and, when the document
+    /// could say, after the text `before` (see `Commit::before`).
     pub fn suggest(
         &mut self,
         roman: &str,
         context: &[String],
+        before: Option<&str>,
         k: usize,
         deadline_ms: u32,
     ) -> Option<Suggestion> {
@@ -605,6 +619,7 @@ impl Engine {
             "op": "suggest",
             "roman": roman,
             "context": context,
+            "before": before,
             "k": k,
             "deadline_ms": deadline_ms,
         })
@@ -624,6 +639,8 @@ impl Engine {
                 partial: r.partial,
                 strong: r.strong,
                 next: r.next,
+                next_shares: r.next_shares,
+                next_model: r.next_model,
             }),
             Ok(r) => {
                 log!("engine error: {}", r.error.unwrap_or_default());
@@ -650,6 +667,7 @@ impl Engine {
             "context": commit.context,
             "latency_ms": commit.latency_ms,
             "predicted": commit.predicted,
+            "before": commit.before,
         })
         .to_string();
         if let Err(e) = self.call(&request, read_timeout_for(COMMIT_DEADLINE_MS)) {
@@ -668,23 +686,17 @@ impl Engine {
     /// Short deadline: this is on the keystroke path and a list that arrives late is worse than one
     /// that does not arrive, because the next keystroke is already replacing it.
     ///
-    /// `tab_hint` labels the entry "Tab" instead of numbering it: a next-word suggestion.
-    /// `predicted_from` is where predicted next words begin, drawn apart from the rest.
-    pub fn ui_show(
-        &mut self,
-        items: &[String],
-        cursor: usize,
-        rect: (i32, i32, i32, i32),
-        tab_hint: bool,
-        predicted_from: Option<usize>,
-    ) {
+    /// `content` is exactly what the local window would have drawn (`likhi_ui::Content`).
+    pub fn ui_show(&mut self, content: &likhi_ui::Content, rect: (i32, i32, i32, i32)) {
         let request = serde_json::json!({
             "op": "ui_show",
-            "items": items,
-            "cursor": cursor,
+            "items": content.candidates,
+            "cursor": content.cursor,
             "rect": [rect.0, rect.1, rect.2, rect.3],
-            "tab_hint": tab_hint,
-            "predicted_from": predicted_from,
+            "tab_hint": content.tab_hint,
+            "predicted_from": content.predicted_from,
+            "typed_at": content.typed_at,
+            "tab_at": content.tab_at,
         })
         .to_string();
         if let Err(e) = self.call(&request, read_timeout_for(TYPE_DEADLINE_MS)) {
@@ -699,22 +711,28 @@ impl Engine {
     /// Asked right after a word is committed with Space, with the typing deadline: it is a table
     /// lookup in the engine, and a strip that arrives late is worse than none because the next letter
     /// is already on its way.
-    pub fn next(&mut self, context: &[String], k: usize, min_share: f64) -> Vec<String> {
+    ///
+    /// Also whether the downloaded neural model answered, rather than the counted table.
+    pub fn next(&mut self, context: &[String], before: Option<&str>, k: usize, min_share: f64) -> (Vec<String>, bool) {
         let request = serde_json::json!({
             "op": "next",
             "context": context,
+            "before": before,
             "k": k,
             "min_share": min_share,
         })
         .to_string();
         let Ok(line) = self.call(&request, read_timeout_for(TYPE_DEADLINE_MS)) else {
-            return Vec::new();
+            return (Vec::new(), false);
         };
-        serde_json::from_str::<serde_json::Value>(&line)
-            .ok()
+        let reply = serde_json::from_str::<serde_json::Value>(&line).ok();
+        let words = reply
+            .as_ref()
             .and_then(|v| v.get("candidates").cloned())
             .and_then(|c| serde_json::from_value::<Vec<String>>(c).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        let model = reply.as_ref().and_then(|v| v.get("model")).and_then(|m| m.as_bool()).unwrap_or(false);
+        (words, model)
     }
 
     /// Counted, never with the word: whether next-word suggestions earn their place is decided by
@@ -755,7 +773,7 @@ mod tests {
     fn suggests_over_the_pipe() {
         let mut engine = Engine::new(47123);
         let answer = engine
-            .suggest("amar", &[], 5, TYPE_DEADLINE_MS)
+            .suggest("amar", &[], None, 5, TYPE_DEADLINE_MS)
             .expect("the engine should answer");
         assert_eq!(engine.transport_name(), Some("pipe"), "should prefer the pipe");
         assert!(!answer.candidates.is_empty(), "amar should suggest something");
@@ -769,10 +787,10 @@ mod tests {
     #[ignore = "needs a running engine"]
     fn stays_inside_the_deadline() {
         let mut engine = Engine::new(47123);
-        let _ = engine.suggest("ami", &[], 5, TYPE_DEADLINE_MS);
+        let _ = engine.suggest("ami", &[], None, 5, TYPE_DEADLINE_MS);
 
         let started = Instant::now();
-        let answer = engine.suggest("bhalobasha", &[], 5, COMMIT_DEADLINE_MS);
+        let answer = engine.suggest("bhalobasha", &[], None, 5, COMMIT_DEADLINE_MS);
         let took = started.elapsed();
         assert!(answer.is_some(), "the engine should answer");
         assert!(
@@ -825,11 +843,11 @@ mod tests {
         let mut engine = Engine::new(1);
         engine.pipe = r"\\.\pipe\likhi-engine-there-is-no-such-pipe".to_string();
         let first = Instant::now();
-        assert!(engine.suggest("amar", &[], 5, TYPE_DEADLINE_MS).is_none());
+        assert!(engine.suggest("amar", &[], None, 5, TYPE_DEADLINE_MS).is_none());
         let first_took = first.elapsed();
 
         let second = Instant::now();
-        assert!(engine.suggest("amar", &[], 5, TYPE_DEADLINE_MS).is_none());
+        assert!(engine.suggest("amar", &[], None, 5, TYPE_DEADLINE_MS).is_none());
         let second_took = second.elapsed();
 
         assert!(

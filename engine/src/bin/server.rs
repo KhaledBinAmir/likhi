@@ -163,7 +163,10 @@ fn data_dir() -> PathBuf {
                 p.pop();
             }
             let candidate = p.join("models");
-            if candidate.join("indicxlit").join("model.lkw").exists() {
+            // The tables are always there; the model is the Likhi model or, before it, IndicXlit.
+            if candidate.join("lexicon").join("unigrams.lkx").exists()
+                && ["likhi", "indicxlit"].iter().any(|m| candidate.join(m).join("model.lkw").exists())
+            {
                 return candidate;
             }
         }
@@ -173,6 +176,17 @@ fn data_dir() -> PathBuf {
         .parent()
         .map(|p| p.join("models").join("rust"))
         .unwrap_or_else(|| PathBuf::from("models/rust"))
+}
+
+/// The neural next-word model, when it has been downloaded: `%LOCALAPPDATA%\Likhi\nextword`, or
+/// `LIKHI_NEXTLM` during development. It is never installed with Likhi -- asking for it is the
+/// download -- so its absence is the ordinary case and not worth a log line.
+fn next_word_model_dir() -> Option<PathBuf> {
+    let dir = match std::env::var_os("LIKHI_NEXTLM") {
+        Some(d) => PathBuf::from(d),
+        None => PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Likhi").join("nextword"),
+    };
+    dir.join("model.lkm").exists().then_some(dir)
 }
 
 fn serve_socket(stream: TcpStream, svc: Arc<SuggestService>, tel: Arc<Telemetry>) {
@@ -310,7 +324,29 @@ fn main() {
         ));
     }
 
-    let svc = Arc::new(SuggestService::new(Arc::clone(&engine), 2048));
+    let mut svc = SuggestService::new(Arc::clone(&engine), 2048);
+    // One model: when the Likhi model transliterating has a word head, it predicts the next word
+    // too, and no separate next-word model is loaded.
+    let likhi = engine.transliterator().filter(|x| !x.words().is_empty());
+    if let Some(x) = likhi {
+        match likhi_engine::nextlm::Predictor::from_likhi(x) {
+            Ok(p) => {
+                log("next words from the Likhi model's word head");
+                svc = svc.with_predictor(p);
+            }
+            Err(e) => log(&format!("the Likhi model's word head is not usable: {e}")),
+        }
+    } else if let Some(dir) = next_word_model_dir() {
+        match likhi_engine::nextlm::Predictor::open(&dir) {
+            Ok(p) => {
+                log(&format!("next-word model loaded from {}", dir.display()));
+                svc = svc.with_predictor(p);
+            }
+            // Next words then come from the counted table, as they do without the download.
+            Err(e) => log(&format!("next-word model in {} not used: {e}", dir.display())),
+        }
+    }
+    let svc = Arc::new(svc);
     let stop = Arc::new(AtomicBool::new(false));
 
     // One early round, then the steady interval. Waiting a full interval for the first upload means

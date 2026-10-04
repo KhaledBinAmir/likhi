@@ -310,7 +310,7 @@ fn letters(csv_path: &Path, max_letters: usize) {
             for len in 1..=max_letters.min(n) {
                 let prefix: String = r.chars().take(len).collect();
                 let (base, _) = engine.fast_suggest(&prefix, &context, K);
-                let predicted = engine.next_completions(prev, &prefix, 2);
+                let predicted: Vec<String> = engine.next_completions(prev, &prefix, 2).into_iter().map(|(w, _)| w).collect();
                 tried[len] += 1;
                 if !predicted.is_empty() {
                     offered[len] += 1;

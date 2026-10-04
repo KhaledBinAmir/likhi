@@ -70,11 +70,26 @@ struct State {
     /// `candidates` holds a next-word suggestion rather than a composition list. Nothing is being
     /// composed while this is true; Tab takes the suggestion and anything else dismisses it.
     predicting: bool,
-    /// The entries of `candidates` that first-letter prediction put there, for telling the engine
-    /// when one of them is the word taken.
-    predicted: Vec<String>,
-    /// Where those entries begin in `candidates`, for drawing them apart from the rest.
-    predicted_from: Option<usize>,
+    /// The model's surest guess at the word being typed (`guess_pick`) and its place in
+    /// `candidates`, which Tab takes: marked where it is when it is one of the readings, otherwise
+    /// added after them (`guess_added`).
+    guess: Option<(String, usize)>,
+    guess_added: bool,
+    /// How sure the model had to be for `guess`, kept for the pause timer's refined list.
+    guess_min: Option<f64>,
+    /// This word was taken with Tab, as the model's guess. Reported with the commit: how often the
+    /// guess is taken is how it earns its place.
+    tab_taken: bool,
+    /// Where the Latin as typed is in `candidates`, for drawing it dimmer.
+    typed_at: Option<usize>,
+    /// The document's text just before this word, read once as its composition starts, when the
+    /// application can say: the sentence the next-word model reads, which no history of our own
+    /// commits can know -- words typed in English, pasted, or written before a click moved the caret.
+    before: Option<String>,
+    /// The document's text up to and including the word last committed, when its `before` was
+    /// known: the sentence so far, for what is asked before the document can be read again -- the
+    /// guess after Space, and the next word's first letter. Kept across words, unlike the rest.
+    before_next: Option<String>,
     engine: Engine,
 }
 
@@ -92,8 +107,13 @@ impl State {
             context: Vec::new(),
             worst_key_us: 0,
             predicting: false,
-            predicted: Vec::new(),
-            predicted_from: None,
+            guess: None,
+            guess_added: false,
+            guess_min: None,
+            tab_taken: false,
+            typed_at: None,
+            before: None,
+            before_next: None,
             engine: Engine::new(port),
         }
     }
@@ -109,17 +129,23 @@ impl State {
         self.retyped = false;
         self.worst_key_us = 0;
         self.predicting = false;
-        self.predicted.clear();
-        self.predicted_from = None;
+        self.guess = None;
+        self.guess_added = false;
+        self.tab_taken = false;
+        self.typed_at = None;
+        self.before = None;
     }
 
-    /// Take an answer from the engine, with first-letter predictions placed into it when `predict`.
-    fn take(&mut self, reply: Suggestion, predict: bool, k: usize) {
-        let offered: &[String] = if predict { &reply.next } else { &[] };
-        let (candidates, placed, from) = with_predictions(reply.candidates, offered, k);
-        self.candidates = candidates;
-        self.predicted = placed;
-        self.predicted_from = from;
+    /// Take an answer from the engine: its readings, the typed Latin, and the model's guess when it
+    /// is at least `guess_min` sure.
+    fn take(&mut self, reply: Suggestion, guess_min: Option<f64>, k: usize) {
+        let guess = guess_min.and_then(|min| guess_pick(&reply, &self.buffer, min));
+        let a = arrange(reply.candidates, guess.as_deref(), &self.buffer, k);
+        self.candidates = a.list;
+        self.guess = guess.zip(a.guess_at);
+        self.guess_added = a.added;
+        self.guess_min = guess_min;
+        self.typed_at = a.typed_at;
         self.partial = reply.partial;
         self.strong = reply.strong;
     }
@@ -159,6 +185,10 @@ pub struct TextService {
     state: Rc<RefCell<State>>,
     /// Created on first use, on the application's UI thread, and kept for the life of the service.
     window: RefCell<Option<CandidateWindow>>,
+    /// The engine has answered from the neural model at least once. Until it has, no guess is
+    /// asked for after Space: without the model there is never one to offer, and the question
+    /// would cost a round trip on every Space for nothing.
+    model_answered: Cell<bool>,
     config: Config,
     /// The toggle key's virtual key code, resolved once. It is consulted on every keystroke, and
     /// parsing "F12" out of a string each time is work the typing path does not need.
@@ -193,11 +223,22 @@ pub struct TextService {
 /// was about how keys behave. This one has a checkbox in the Likhi window, and a checkbox that
 /// does nothing until each application is restarted looks broken.
 struct NextWordSetting {
-    on: bool,
-    after_space: bool,
-    min_share: f64,
+    now: NextWordNow,
     stamp: u128,
     checked_at: std::time::Instant,
+}
+
+/// The next-word settings themselves (see `Config`).
+#[derive(Clone, Copy)]
+struct NextWordNow {
+    on: bool,
+    min_share: f64,
+}
+
+impl NextWordNow {
+    fn from(c: &Config) -> NextWordNow {
+        NextWordNow { on: c.next_word, min_share: c.next_word_min_share }
+    }
 }
 
 impl TextService {
@@ -214,6 +255,7 @@ impl TextService {
             thread_mgr_cookie: Cell::new(TF_INVALID_COOKIE),
             state,
             window: RefCell::new(None),
+            model_answered: Cell::new(false),
             toggle_vk: config.toggle_vk(),
             bangla: Cell::new(true),
             attribute_atom: Cell::new(0),
@@ -224,9 +266,7 @@ impl TextService {
             draw_ourselves: Cell::new(true),
             remote_shown: Cell::new(false),
             next_word: RefCell::new(NextWordSetting {
-                on: config.next_word,
-                after_space: config.next_word_after_space,
-                min_share: config.next_word_min_share,
+                now: NextWordNow::from(&config),
                 stamp: crate::config::stamp(),
                 checked_at: std::time::Instant::now(),
             }),
@@ -534,16 +574,23 @@ impl TextService_Impl {
     /// ranking, and the top of a new ranking is the answer.
     fn ask(&self, deadline_ms: u32) {
         let wanted = self.config.candidates.clamp(1, 9);
-        let predict = self.next_word_share().is_some();
+        let guess_min = self.next_word_share();
         let mut s = self.state.borrow_mut();
         let buffer = s.buffer.clone();
         let context = s.context.clone();
-        match s.engine.suggest(&buffer, &context, wanted, deadline_ms) {
-            Some(reply) => s.take(reply, predict, wanted),
+        let before = s.before.clone().or_else(|| s.before_next.clone());
+        match s.engine.suggest(&buffer, &context, before.as_deref(), wanted, deadline_ms) {
+            Some(reply) => {
+                if reply.next_model {
+                    self.model_answered.set(true);
+                }
+                s.take(reply, guess_min, wanted);
+            }
             None => {
                 s.candidates.clear();
-                s.predicted.clear();
-                s.predicted_from = None;
+                s.guess = None;
+                s.guess_added = false;
+                s.typed_at = None;
                 s.partial = false;
                 s.strong = false;
             }
@@ -584,7 +631,10 @@ impl TextService_Impl {
                     let range = unsafe { insert.InsertTextAtSelection(ec, TF_IAS_QUERYONLY, &[]) }?;
                     let owner: ITfContextComposition = ctx2.cast()?;
                     let c = unsafe { owner.StartComposition(ec, &range, &sink) }?;
-                    state.borrow_mut().composition = Some(c.clone());
+                    let before = text_before(ec, &range);
+                    let mut s = state.borrow_mut();
+                    s.composition = Some(c.clone());
+                    s.before = before;
                     c
                 }
             };
@@ -638,7 +688,8 @@ impl TextService_Impl {
                 0 => None,
                 us => Some(us as f64 / 1000.0),
             };
-            let predicted = s.predicted.iter().any(|p| p == word);
+            let predicted = s.tab_taken;
+            let before = s.before.clone();
             if !buffer.is_empty() {
                 s.engine.learn(&Commit {
                     roman: &buffer,
@@ -650,9 +701,11 @@ impl TextService_Impl {
                     context: &context,
                     latency_ms,
                     predicted,
+                    before: before.as_deref(),
                 });
             }
             s.remember(word);
+            s.before_next = before.map(|b| format!("{b}{word} "));
         }
     }
 
@@ -670,31 +723,29 @@ impl TextService_Impl {
         self.finish(ctx, String::new())
     }
 
-    /// After a word is committed with Space: offer the word most likely to come next, when the engine
-    /// is sure enough to be worth the glance. Off unless `next_word_after_space` is set.
-    ///
-    /// One word, labelled Tab, and only above a confidence threshold. Measured on held-out chat
-    /// (`likhi-nextword`), always showing the top guess is right 9.6% of the time; showing it only
-    /// when it holds a fifth of what follows the previous word is right 24% of the time, in 16% of
-    /// the gaps between words. A strip that is usually wrong teaches people to stop looking at it.
+    /// After a word is committed with Space: offer the model's guess at the next word, labelled
+    /// Tab, when it is sure enough (`next_word_min_share`). Only the model's guesses: the counted
+    /// table's were right too rarely to be worth a popup after every word. At 0.5, on held-out chat,
+    /// a guess is offered after one Space in seventeen and is right 61 times in 100.
     ///
     /// Nothing is claimed while it shows except Tab and Escape, so a typist who ignores it loses
     /// nothing: the next letter starts the next word exactly as before, and dismisses it.
     fn predict(&self, ctx: &ITfContext) {
-        if !self.bangla.get() {
+        if !self.bangla.get() || !self.model_answered.get() {
             return;
         }
-        let (on, after_space, min_share) = self.next_word_setting();
-        if !on || !after_space {
-            return;
-        }
+        let Some(min_share) = self.next_word_share() else { return };
         let word = {
             let mut s = self.state.borrow_mut();
             if s.context.is_empty() {
                 return;
             }
             let context = s.context.clone();
-            s.engine.next(&context, 1, min_share).into_iter().next()
+            let before = s.before_next.clone();
+            match s.engine.next(&context, before.as_deref(), 1, min_share) {
+                (words, true) => words.into_iter().next(),
+                _ => None,
+            }
         };
         let Some(word) = word else { return };
         {
@@ -706,34 +757,43 @@ impl TextService_Impl {
         self.update_window(ctx);
     }
 
-    /// The confidence threshold when next-word suggestions are on, None when they are off.
+    /// Tab with the model's guess in the list: commit it and a space in place of what was typed,
+    /// as if it had been picked by its number, then offer what follows it.
+    fn take_guess(&self, ctx: &ITfContext) -> Result<()> {
+        let (word, index) = {
+            let mut s = self.state.borrow_mut();
+            let Some(guess) = s.guess.take() else { return Ok(()) };
+            s.tab_taken = true;
+            guess
+        };
+        self.commit(ctx, index, word, " ")?;
+        self.predict(ctx);
+        Ok(())
+    }
+
+    /// How sure the model must be for a guess when guesses are on, None when they are off.
     ///
     /// The settings files are looked at no more than every two seconds, and read again only when
     /// they have changed: two `stat` calls, after a Space, at most that often. Switching the
     /// checkbox takes effect in every application within those two seconds.
     fn next_word_share(&self) -> Option<f64> {
         let setting = self.next_word_setting();
-        setting.0.then_some(setting.2)
+        setting.on.then_some(setting.min_share)
     }
 
-    /// (predictions on, the after-Space guess on, its threshold), kept current as described at
-    /// `next_word_share`.
-    fn next_word_setting(&self) -> (bool, bool, f64) {
+    /// The next-word settings, kept current as described at `next_word_share`.
+    fn next_word_setting(&self) -> NextWordNow {
         let mut setting = self.next_word.borrow_mut();
         if setting.checked_at.elapsed() >= std::time::Duration::from_secs(2) {
             setting.checked_at = std::time::Instant::now();
             let stamp = crate::config::stamp();
             if stamp != setting.stamp {
                 setting.stamp = stamp;
-                let c = Config::load();
-                setting.on = c.next_word;
-                setting.after_space = c.next_word_after_space;
-                setting.min_share = c.next_word_min_share;
+                setting.now = NextWordNow::from(&Config::load());
             }
         }
-        (setting.on, setting.after_space, setting.min_share)
+        setting.now
     }
-
     /// Take the suggestion off the screen and forget it. Harmless when there is none.
     fn dismiss_prediction(&self) {
         {
@@ -790,6 +850,7 @@ impl TextService_Impl {
             let mut s = self.state.borrow_mut();
             s.engine.next_taken();
             s.remember(&word);
+            s.before_next = s.before_next.take().map(|b| format!("{b}{word} "));
         }
         self.predict(ctx);
         Ok(())
@@ -814,7 +875,12 @@ impl TextService_Impl {
     }
 
     fn reset(&self) {
-        self.state.borrow_mut().clear_word();
+        {
+            let mut s = self.state.borrow_mut();
+            s.clear_word();
+            // Focus moved, or the keyboard went: the sentence it was in is not the next one's.
+            s.before_next = None;
+        }
         self.hide_window();
     }
 
@@ -912,10 +978,11 @@ impl TextService_Impl {
     /// composition having been created a moment ago and not laid out -- the caret is used instead.
     /// The list is hidden only when neither is known.
     fn update_window(&self, ctx: &ITfContext) {
-        let (candidates, cursor, tab_hint, predicted_from) = {
+        let content = {
             let s = self.state.borrow();
-            (s.candidates.clone(), s.cursor, s.predicting, s.predicted_from)
+            shown(&s)
         };
+        let (candidates, cursor) = (content.candidates.clone(), content.cursor);
         if candidates.is_empty() {
             self.hide_window();
             return;
@@ -959,7 +1026,7 @@ impl TextService_Impl {
                 }
             };
             let mut s = self.state.borrow_mut();
-            s.engine.ui_show(&candidates, cursor, anchor, tab_hint, predicted_from);
+            s.engine.ui_show(&content, anchor);
             self.remote_shown.set(true);
             return;
         }
@@ -988,20 +1055,16 @@ impl TextService_Impl {
                 }
                 let buffer = s.buffer.clone();
                 let context = s.context.clone();
-                // Predictions stay if the list being refined had them: the setting was already
-                // consulted for that list, a moment ago.
-                let predict = !s.predicted.is_empty();
-                let reply = s.engine.suggest(&buffer, &context, wanted, COMMIT_DEADLINE_MS)?;
-                s.take(reply, predict, wanted);
+                let before = s.before.clone();
+                // The guess's threshold is the one the list being refined was made with: the
+                // setting was consulted for that list a moment ago.
+                let guess_min = s.guess_min;
+                let reply = s.engine.suggest(&buffer, &context, before.as_deref(), wanted, COMMIT_DEADLINE_MS)?;
+                s.take(reply, guess_min, wanted);
                 if !s.chosen {
                     s.cursor = 0;
                 }
-                Some(likhi_ui::Content {
-                    candidates: s.candidates.clone(),
-                    cursor: s.cursor,
-                    tab_hint: false,
-                    predicted_from: s.predicted_from,
-                })
+                Some(shown(&s))
             }));
             *self.window.borrow_mut() = Some(window);
         }
@@ -1014,7 +1077,6 @@ impl TextService_Impl {
             }
         };
         if let Some(w) = self.window.borrow().as_ref() {
-            let content = likhi_ui::Content { candidates, cursor, tab_hint, predicted_from };
             w.show_content(content, &anchor);
         }
         // The anchor decides where the list appears, and a rectangle in the wrong coordinate space
@@ -1140,31 +1202,84 @@ impl TextService_Impl {
     }
 }
 
-/// The candidate list with first-letter predictions placed in it: the list, which predictions made
-/// it in, and where they begin.
-///
-/// They take the last two places, after the first three readings of what was typed; one the
-/// engine already had lower down moves up to join them. The first entries are never touched: the
-/// first is what Space commits -- so someone who types without looking can never be handed a
-/// guess -- and the second is where the wanted word was in three quarters of the pilot's misses.
-/// Measured on held-out chat (`likhi-nextword --letters`), for the same keystrokes saved, the
-/// wanted word was pushed down 178 times in 11,597 words with predictions after the first entry,
-/// 29 after the second, and 8 in the last two places.
-fn with_predictions(base: Vec<String>, predicted: &[String], k: usize) -> (Vec<String>, Vec<String>, Option<usize>) {
-    const AT: usize = 3;
-    const MOST: usize = 2;
-    let head: Vec<String> = base.iter().take(AT).cloned().collect();
-    let extra: Vec<String> = predicted.iter().filter(|w| !head.contains(w)).take(MOST).cloned().collect();
-    let from = head.len();
-    let mut list = head;
-    list.extend(extra.iter().cloned());
-    list.extend(base.into_iter().skip(AT).filter(|w| !extra.contains(w)));
-    list.truncate(k);
-    let placed: Vec<String> = extra.into_iter().filter(|w| list.contains(w)).collect();
-    let from = (!placed.is_empty()).then_some(from);
-    (list, placed, from)
+/// What the candidate window draws for this state, wherever it is drawn.
+fn shown(s: &State) -> likhi_ui::Content {
+    let tab_at = s.guess.as_ref().map(|g| g.1);
+    likhi_ui::Content {
+        candidates: s.candidates.clone(),
+        cursor: s.cursor,
+        tab_hint: s.predicting,
+        predicted_from: tab_at.filter(|_| s.guess_added),
+        typed_at: s.typed_at,
+        tab_at,
+    }
 }
 
+/// The model's guess for a reply, if any: its likeliest word for the letters typed, when it holds
+/// at least `min` of the words that fit them and is not what Space would type anyway -- Tab for the
+/// first reading would only repeat Space. The counted table's guesses never qualify: measured on
+/// held-out chat, they are right too rarely to be offered on their own.
+fn guess_pick(reply: &Suggestion, typed: &str, min: f64) -> Option<String> {
+    if !reply.next_model {
+        return None;
+    }
+    let (word, share) = reply.next.first().zip(reply.next_shares.first())?;
+    let space_types_it = reply.candidates.first() == Some(word);
+    (f64::from(*share) >= min && !space_types_it && word != typed).then(|| word.clone())
+}
+
+/// The list as it is shown: readings of what was typed, the model's guess when it is not one of
+/// them, and the Latin exactly as typed.
+struct Arranged {
+    list: Vec<String>,
+    /// Where the guess is, which Tab takes.
+    guess_at: Option<usize>,
+    /// The guess was added rather than found among the readings: drawn after a divider.
+    added: bool,
+    /// Where the typed Latin is, for drawing it dimmer.
+    typed_at: Option<usize>,
+}
+
+/// Arrange the engine's readings, the model's guess and the typed Latin into `k` places.
+///
+/// The typed Latin is always offered, last. Without it English could only be typed by switching
+/// modes, and the engine's learning of English -- pick the Latin for "ok" a few times and it comes
+/// first -- could never be taught, because the Latin never reached the list. It costs the last
+/// reading, which testers took for 6 words in 10,635.
+///
+/// The guess is only marked when it is one of the readings shown, so nothing moves. Otherwise it is
+/// added before the Latin, and never among the first three readings: the first is what Space
+/// commits, so someone typing without looking is never handed a guess, and the second and third
+/// hold nearly every word the pilot picked that was not first. Measured on held-out chat
+/// (`likhi-nextword --letters`), predictions ahead of the third reading pushed the wanted word
+/// down 29 to 178 times in 11,597 words; after it, 8.
+fn arrange(base: Vec<String>, guess: Option<&str>, typed: &str, k: usize) -> Arranged {
+    const READINGS_KEPT: usize = 3;
+    let k = k.max(1);
+    // Reserve the last place for the Latin unless the engine already ranks it where it will show.
+    let typed_shown = base.iter().take(k.saturating_sub(1)).any(|w| w == typed);
+    let reserve = !typed.is_empty() && !typed_shown;
+    let slots = k - usize::from(reserve && k > 1);
+    let guess = guess.filter(|g| *g != typed);
+    let mut list: Vec<String> = base.into_iter().filter(|w| !(reserve && w == typed)).collect();
+    let mut guess_at = guess.and_then(|g| list.iter().take(slots).position(|w| w == g));
+    let mut added = false;
+    match guess {
+        Some(g) if guess_at.is_none() && slots > READINGS_KEPT => {
+            list.retain(|w| w != g);
+            list.truncate(slots - 1);
+            guess_at = Some(list.len());
+            added = true;
+            list.push(g.to_string());
+        }
+        _ => list.truncate(slots),
+    }
+    if reserve {
+        list.push(typed.to_string());
+    }
+    let typed_at = if typed.is_empty() { None } else { list.iter().position(|w| w == typed) };
+    Arranged { list, guess_at, added, typed_at }
+}
 /// The document's current selection -- the caret, when nothing is selected -- or None when it has
 /// none to report. Inside an edit session only.
 fn selection(ctx: &ITfContext, ec: u32) -> Result<Option<ITfRange>> {
@@ -1175,6 +1290,27 @@ fn selection(ctx: &ITfContext, ec: u32) -> Result<Option<ITfRange>> {
     // ordinary Option, which releases it when dropped.
     let range = unsafe { ManuallyDrop::take(&mut slot[0].range) };
     Ok(if fetched == 1 { range } else { None })
+}
+
+/// How much of the document before a word is read for the next-word model, in UTF-16 units: some
+/// thirty Bangla words, more than a sentence of chat, and a bounded cost once per word.
+const BEFORE_UNITS: usize = 160;
+
+/// Up to `BEFORE_UNITS` of the document just before `at`, or None when the application does not let
+/// text be read back. Only the next-word model's input, which the engine cuts to the current line;
+/// never logged.
+fn text_before(ec: u32, at: &ITfRange) -> Option<String> {
+    unsafe {
+        let probe = at.Clone().ok()?;
+        probe.Collapse(ec, TF_ANCHOR_START).ok()?;
+        let mut moved = 0i32;
+        probe.ShiftStart(ec, -(BEFORE_UNITS as i32), &mut moved, std::ptr::null()).ok()?;
+        let mut buf = vec![0u16; BEFORE_UNITS];
+        let mut got = 0u32;
+        probe.GetText(ec, 0, &mut buf, &mut got).ok()?;
+        buf.truncate(got as usize);
+        Some(String::from_utf16_lossy(&buf))
+    }
 }
 
 /// Whether the text just before `caret` is exactly `expected`.
@@ -1510,6 +1646,17 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         }
         let ctx = pic.ok()?.clone();
 
+        // Tab with the model's guess in the list takes the guess. Without one, Tab keeps its
+        // meaning, below.
+        if VIRTUAL_KEY(vk as u16) == VK_TAB && self.composing() && self.state.borrow().guess.is_some() {
+            if let Err(e) = self.take_guess(&ctx) {
+                log!("the guess could not be taken: {e}");
+                self.reset();
+                return Ok(BOOL(0));
+            }
+            return Ok(BOOL(1));
+        }
+
         // Commit the word as it stands, then give the key back: "not eaten" lets the application do
         // what the key means -- insert the tab, move to the next field, select all, send.
         if self.composing() && ends_word(vk, self.toggle_vk) {
@@ -1600,68 +1747,109 @@ impl ITfCompositionSink_Impl for TextService_Impl {
 
 #[cfg(test)]
 mod tests {
-    use super::with_predictions;
+    use super::{arrange, guess_pick};
+    use crate::engine::Suggestion;
 
     fn words(v: &[&str]) -> Vec<String> {
         v.iter().map(|w| w.to_string()).collect()
     }
 
-    #[test]
-    fn predictions_take_the_last_two_places() {
-        let (list, placed, from) = with_predictions(words(&["a", "b", "c", "d", "e"]), &words(&["x", "y"]), 5);
-        assert_eq!(list, words(&["a", "b", "c", "x", "y"]));
-        assert_eq!(placed, words(&["x", "y"]));
-        assert_eq!(from, Some(3));
+    fn reply(candidates: &[&str], next: &[&str], shares: &[f32], model: bool) -> Suggestion {
+        Suggestion {
+            candidates: words(candidates),
+            next: words(next),
+            next_shares: shares.to_vec(),
+            next_model: model,
+            ..Default::default()
+        }
     }
 
     #[test]
-    fn the_readings_of_what_was_typed_never_move() {
-        // Even when a prediction is one of them: it stays where Space or its number already finds
-        // it, and is not counted as placed by prediction.
-        let (list, placed, from) = with_predictions(words(&["a", "b", "c"]), &words(&["c", "a"]), 5);
-        assert_eq!(list, words(&["a", "b", "c"]));
-        assert!(placed.is_empty());
-        assert_eq!(from, None);
+    fn the_guess_is_the_models_sure_word() {
+        let r = reply(&["ko", "kor"], &["korben", "kotha"], &[0.62, 0.2], true);
+        assert_eq!(guess_pick(&r, "ko", 0.5).as_deref(), Some("korben"));
+        // Not sure enough.
+        assert_eq!(guess_pick(&r, "ko", 0.7), None);
+        // The counted table's guess is never offered, however sure.
+        assert_eq!(guess_pick(&reply(&["ko"], &["korben"], &[0.9], false), "ko", 0.5), None);
     }
 
     #[test]
-    fn a_prediction_further_down_moves_up_instead_of_repeating() {
-        let (list, placed, from) = with_predictions(words(&["a", "b", "c", "d", "e"]), &words(&["e"]), 5);
-        assert_eq!(list, words(&["a", "b", "c", "e", "d"]));
-        assert_eq!(placed, words(&["e"]));
-        assert_eq!(from, Some(3));
+    fn no_guess_for_what_space_would_type_anyway() {
+        let r = reply(&["korben", "kor"], &["korben"], &[0.9], true);
+        assert_eq!(guess_pick(&r, "ko", 0.5), None);
+        assert_eq!(guess_pick(&reply(&["a"], &[], &[], true), "ko", 0.0), None);
+        assert_eq!(guess_pick(&reply(&["a"], &["ko"], &[0.9], true), "ko", 0.5), None);
     }
 
     #[test]
-    fn no_predictions_leaves_the_list_as_it_was() {
-        let base = words(&["a", "b", "c", "d"]);
-        let (list, placed, from) = with_predictions(base.clone(), &[], 5);
-        assert_eq!(list, base);
-        assert!(placed.is_empty());
-        assert_eq!(from, None);
+    fn a_guess_among_the_readings_is_marked_where_it_is() {
+        let a = arrange(words(&["a", "b", "c", "d", "e"]), Some("b"), "ko", 5);
+        assert_eq!(a.list, words(&["a", "b", "c", "d", "ko"]));
+        assert_eq!((a.guess_at, a.added), (Some(1), false));
+        assert_eq!(a.typed_at, Some(4));
     }
 
     #[test]
-    fn a_short_list_gets_them_after_what_it_has() {
-        let (list, _, from) = with_predictions(words(&["a"]), &words(&["x", "y"]), 5);
-        assert_eq!(list, words(&["a", "x", "y"]));
-        assert_eq!(from, Some(1));
+    fn any_other_guess_is_added_before_the_latin() {
+        let a = arrange(words(&["a", "b", "c", "d", "e"]), Some("x"), "ko", 5);
+        assert_eq!(a.list, words(&["a", "b", "c", "x", "ko"]));
+        assert_eq!((a.guess_at, a.added), (Some(3), true));
+        assert_eq!(a.typed_at, Some(4));
     }
 
     #[test]
-    fn the_list_keeps_its_length() {
-        let (list, placed, from) = with_predictions(words(&["a", "b", "c", "d"]), &words(&["x", "y"]), 4);
-        assert_eq!(list, words(&["a", "b", "c", "x"]));
-        // Only what is actually on screen counts as placed.
-        assert_eq!(placed, words(&["x"]));
-        assert_eq!(from, Some(3));
+    fn without_a_guess_the_fourth_reading_keeps_its_place() {
+        let a = arrange(words(&["a", "b", "c", "d", "e"]), None, "ko", 5);
+        assert_eq!(a.list, words(&["a", "b", "c", "d", "ko"]));
+        assert_eq!(a.guess_at, None);
+        assert_eq!(a.typed_at, Some(4));
     }
 
     #[test]
-    fn no_room_means_no_predictions() {
-        let (list, placed, from) = with_predictions(words(&["a", "b", "c"]), &words(&["x"]), 3);
-        assert_eq!(list, words(&["a", "b", "c"]));
-        assert!(placed.is_empty());
-        assert_eq!(from, None);
+    fn a_guess_lower_down_moves_up_instead_of_repeating() {
+        let a = arrange(words(&["a", "b", "c", "d", "x"]), Some("x"), "ko", 5);
+        assert_eq!(a.list, words(&["a", "b", "c", "x", "ko"]));
+        assert_eq!((a.guess_at, a.added), (Some(3), true));
+    }
+
+    #[test]
+    fn latin_the_engine_already_ranks_stays_where_it_is() {
+        // Learned English -- picked for "ok" often enough -- comes first from the engine; it is not
+        // repeated at the end, and the freed place goes to the readings.
+        let a = arrange(words(&["ok", "ওকে", "ওক", "অক", "ঠিক"]), None, "ok", 5);
+        assert_eq!(a.list, words(&["ok", "ওকে", "ওক", "অক", "ঠিক"]));
+        assert_eq!(a.typed_at, Some(0));
+    }
+
+    #[test]
+    fn latin_ranked_off_the_end_is_brought_back_to_the_end() {
+        let a = arrange(words(&["a", "b", "c", "d", "ko"]), None, "ko", 4);
+        assert_eq!(a.list, words(&["a", "b", "c", "ko"]));
+        assert_eq!(a.typed_at, Some(3));
+    }
+
+    #[test]
+    fn a_short_list_still_ends_with_the_latin() {
+        let a = arrange(words(&["a"]), None, "zz", 5);
+        assert_eq!(a.list, words(&["a", "zz"]));
+        assert_eq!(a.typed_at, Some(1));
+    }
+
+    #[test]
+    fn a_small_list_gives_up_an_added_guess_before_a_reading() {
+        let a = arrange(words(&["a", "b", "c"]), Some("x"), "ko", 3);
+        assert_eq!(a.list, words(&["a", "b", "ko"]));
+        assert_eq!(a.guess_at, None);
+        // A guess already shown is still marked: marking costs no place.
+        let a = arrange(words(&["a", "b", "c"]), Some("b"), "ko", 3);
+        assert_eq!((a.guess_at, a.added), (Some(1), false));
+    }
+
+    #[test]
+    fn a_guess_that_is_the_latin_is_not_offered() {
+        let a = arrange(words(&["a", "b", "c", "d"]), Some("ko"), "ko", 5);
+        assert_eq!(a.list, words(&["a", "b", "c", "d", "ko"]));
+        assert_eq!(a.guess_at, None);
     }
 }

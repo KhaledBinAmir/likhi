@@ -154,6 +154,50 @@ pub fn has_bengali(text: &str) -> bool {
     text.chars().any(|c| ('\u{0980}'..='\u{09FF}').contains(&c))
 }
 
+/// True for the Bengali block and the two joiners, which is the Python's character class
+/// `[U+0980-U+09FF, U+200C, U+200D]`.
+pub fn is_bengali_token_char(c: char) -> bool {
+    matches!(c, '\u{0980}'..='\u{09FF}' | '\u{200C}' | '\u{200D}')
+}
+
+/// True when a token is only digits and marks, which the Python drops with
+/// `^[U+09E6-U+09EF, U+0981-U+0983, U+09BC, U+09BE-U+09CD, U+09D7, U+200C, U+200D]+$`.
+fn is_all_digits_or_marks(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars().all(|c| {
+            matches!(c,
+                '\u{09E6}'..='\u{09EF}'   // Bengali digits
+                | '\u{0981}'..='\u{0983}' // candrabindu, anusvara, visarga
+                | '\u{09BC}'              // nukta
+                | '\u{09BE}'..='\u{09CD}' // vowel signs through virama
+                | '\u{09D7}'              // au length mark
+                | '\u{200C}' | '\u{200D}')
+        })
+}
+
+/// Bengali word tokens of a line, canonicalised; everything else (Latin, digits, punctuation)
+/// separates words and is dropped. Mirrors `build_lexicon.tokens`. The lexicon builder, the
+/// next-word tools and the next-word model's input all split text with this one function: the
+/// tables and the model know words only in the form it produces.
+pub fn tokens(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    for c in text.chars() {
+        if is_bengali_token_char(c) {
+            current.push(c);
+        } else if !current.is_empty() {
+            if !is_all_digits_or_marks(&current) {
+                out.push(canonical(&current));
+            }
+            current.clear();
+        }
+    }
+    if !current.is_empty() && !is_all_digits_or_marks(&current) {
+        out.push(canonical(&current));
+    }
+    out
+}
+
 /// Loose-romanization key: case-folded, ASCII letters/digits/apostrophe only.
 ///
 /// Case is deliberately dropped: unlike Avro, Likhi never relies on capitalisation.
