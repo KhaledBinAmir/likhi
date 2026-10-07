@@ -54,6 +54,7 @@ def build(out: Path) -> None:
         "/platform:anycpu",
         f"/out:{out}",
         f"/win32icon:{ICON}",
+        f"/resource:{REPO / 'assets' / 'splash_screen' / 'likhi_splash_v1.svg'},likhi_splash_v1.svg",
         "/reference:System.dll",
         "/reference:System.Drawing.dll",
         "/reference:System.Windows.Forms.dll",

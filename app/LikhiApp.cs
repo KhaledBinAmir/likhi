@@ -31,7 +31,91 @@ namespace Likhi
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm());
+            
+            if (!Env.EngineRunning())
+            {
+                Env.StartEngine();
+                Application.Run(new SplashForm());
+            }
+            else
+            {
+                Application.Run(new MainForm());
+            }
+        }
+    }
+
+    class SplashForm : Form
+    {
+        private Timer fadeTimer;
+        private WebBrowser webBrowser;
+
+        public SplashForm()
+        {
+            this.FormBorderStyle = FormBorderStyle.None;
+            this.ShowInTaskbar = false;
+            this.TopMost = true;
+            this.BackColor = Color.Magenta;
+            this.TransparencyKey = Color.Magenta;
+
+            webBrowser = new WebBrowser();
+            webBrowser.ScrollBarsEnabled = false;
+            webBrowser.IsWebBrowserContextMenuEnabled = false;
+            webBrowser.AllowWebBrowserDrop = false;
+            webBrowser.Dock = DockStyle.Fill;
+            this.Controls.Add(webBrowser);
+
+            string svgContent = "";
+            using (Stream s = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("likhi_splash_v1.svg"))
+            {
+                if (s != null)
+                {
+                    using (StreamReader reader = new StreamReader(s))
+                    {
+                        svgContent = reader.ReadToEnd();
+                    }
+                }
+            }
+
+            string html = @"<!DOCTYPE html>
+<html>
+<head>
+<meta http-equiv=""X-UA-Compatible"" content=""IE=edge"">
+<style>
+body { background-color: #FF00FF; margin: 0; padding: 0; overflow: hidden; }
+svg { width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>" + svgContent + @"</body>
+</html>";
+
+            webBrowser.DocumentText = html;
+
+            int w = (int)(Screen.PrimaryScreen.Bounds.Width * 0.4);
+            int h = (int)((float)w / 1514f * 900f);
+            this.Size = new Size(w, h);
+
+            this.StartPosition = FormStartPosition.Manual;
+            this.Left = Screen.PrimaryScreen.Bounds.X + (Screen.PrimaryScreen.Bounds.Width - w) / 2;
+            this.Top = Screen.PrimaryScreen.Bounds.Y + (Screen.PrimaryScreen.Bounds.Height - h) / 2;
+
+            Timer delayTimer = new Timer();
+            delayTimer.Interval = 5000;
+            delayTimer.Tick += delegate {
+                delayTimer.Stop();
+                fadeTimer = new Timer();
+                fadeTimer.Interval = 10;
+                fadeTimer.Tick += delegate {
+                    if (this.Opacity > 0)
+                        this.Opacity -= 0.01;
+                    else
+                    {
+                        fadeTimer.Stop();
+                        this.Close();
+                    }
+                };
+                fadeTimer.Start();
+            };
+            delayTimer.Start();
         }
     }
 
